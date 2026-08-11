@@ -30,6 +30,8 @@ EXPECTED_SLIPPAGE_BPS="${EXPECTED_SLIPPAGE_BPS:-30}"
 EXPECTED_BIN_STEP="${EXPECTED_BIN_STEP:-1}"
 EXPECTED_PAIR_VERSION="${EXPECTED_PAIR_VERSION:-3}"
 EXPECTED_ASSET_IS_TOKEN_X="${EXPECTED_ASSET_IS_TOKEN_X:-false}"
+EXPECTED_PRICE_ORACLE="${EXPECTED_PRICE_ORACLE:-${LFJ_PRICE_ORACLE:-}}"
+EXPECTED_VALUATION_HAIRCUT_BPS="${EXPECTED_VALUATION_HAIRCUT_BPS:-200}"
 
 IMPL_SLOT="0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
 ADMIN_SLOT="0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103"
@@ -131,6 +133,13 @@ check_num "depositCap()" "$(vault_call 'depositCap()(uint256)')" "$EXPECTED_DEPO
 check_num "binRange()" "$(vault_call 'binRange()(uint256)')" "$EXPECTED_BIN_RANGE"
 check_num "slippageBps()" "$(vault_call 'slippageBps()(uint256)')" "$EXPECTED_SLIPPAGE_BPS"
 
+if [[ -n "$EXPECTED_PRICE_ORACLE" ]]; then
+  check_eq "priceOracle()" "$(vault_call 'priceOracle()(address)')" "$EXPECTED_PRICE_ORACLE"
+  check_num "valuationHaircutBps()" "$(vault_call 'valuationHaircutBps()(uint16)')" "$EXPECTED_VALUATION_HAIRCUT_BPS"
+else
+  info "price oracle not asserted (set EXPECTED_PRICE_ORACLE=0x...)"
+fi
+
 REBALANCER=$(vault_call 'rebalancer()(address)')
 if [[ -n "$KEEPER" ]]; then
   check_eq "rebalancer()" "$REBALANCER" "$KEEPER"
@@ -149,6 +158,10 @@ info "totalAssets() = $TOTAL_ASSETS"
 info "totalSupply() = $TOTAL_SUPPLY"
 info "needsRebalance() = $NEEDS_REB"
 info "getDepositedBins() = $(vault_call 'getDepositedBins()(uint24[])')"
+if [[ -n "$EXPECTED_PRICE_ORACLE" ]]; then
+  info "accountedIdlePaired() = $(vault_call 'accountedIdlePaired()(uint256)')"
+  info "unaccountedPairedBalance() = $(vault_call 'unaccountedPairedBalance()(uint256)')"
+fi
 
 # Share price (USDC per 1 share, 6 decimals)
 if [[ "$TOTAL_SUPPLY" != "0" ]]; then
