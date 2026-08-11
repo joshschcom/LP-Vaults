@@ -7,6 +7,7 @@ import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transpa
 import {LFJStableVault}   from "../contracts/LFJStableVault.sol";
 import {ILBRouter}        from "../contracts/interfaces/ILBRouter.sol";
 import {ILBPair}          from "../contracts/interfaces/ILBPair.sol";
+import {IStableVaultOracle} from "../contracts/interfaces/IStableVaultOracle.sol";
 
 /// @notice Deploy LFJStableVault.
 ///
@@ -50,12 +51,14 @@ contract DeployFuji is DeployLFJBase {
         address deployer = vm.envAddress("DEPLOYER");
         address multisig = vm.envOr("MULTISIG", deployer);
         address keeper   = vm.envOr("KEEPER", deployer);
+        IStableVaultOracle priceOracle = IStableVaultOracle(vm.envAddress("LFJ_PRICE_ORACLE"));
+        uint256 valuationHaircutBps = vm.envOr("LFJ_VALUATION_HAIRCUT_BPS", uint256(200));
 
-        vm.startBroadcast();
+        vm.startBroadcast(deployer);
 
         LFJStableVault implementation = new LFJStableVault();
         bytes memory initData = abi.encodeCall(
-            LFJStableVault.initialize,
+            LFJStableVault.initializeWithOracle,
             (
                 IERC20(USDC), // ERC-4626 asset
                 IERC20(USDC),
@@ -67,7 +70,9 @@ contract DeployFuji is DeployLFJBase {
                 multisig,
                 50_000e6,
                 2,
-                50
+                50,
+                priceOracle,
+                valuationHaircutBps
             )
         );
 
@@ -86,6 +91,7 @@ contract DeployFuji is DeployLFJBase {
         console2.log("  tokenY:     ", address(vault.tokenY()));
         console2.log("  binStep:    ", vault.BIN_STEP());
         console2.log("  rebalancer: ", vault.rebalancer());
+        console2.log("  oracle:     ", address(vault.priceOracle()));
     }
 }
 
@@ -108,12 +114,14 @@ contract DeployMainnet is DeployLFJBase {
         address deployer = vm.envAddress("DEPLOYER");
         address multisig = vm.envOr("MULTISIG", deployer);
         address keeper   = vm.envOr("KEEPER", deployer);
+        IStableVaultOracle priceOracle = IStableVaultOracle(vm.envAddress("LFJ_PRICE_ORACLE"));
+        uint256 valuationHaircutBps = vm.envOr("LFJ_VALUATION_HAIRCUT_BPS", uint256(200));
 
-        vm.startBroadcast();
+        vm.startBroadcast(deployer);
 
         LFJStableVault implementation = new LFJStableVault();
         bytes memory initData = abi.encodeCall(
-            LFJStableVault.initialize,
+            LFJStableVault.initializeWithOracle,
             (
                 IERC20(USDC), // ERC-4626 asset; USDC is tokenY in the live LFJ pair
                 IERC20(AUSD),
@@ -125,7 +133,9 @@ contract DeployMainnet is DeployLFJBase {
                 multisig,
                 500_000e6,
                 2,
-                30
+                30,
+                priceOracle,
+                valuationHaircutBps
             )
         );
 
@@ -142,5 +152,6 @@ contract DeployMainnet is DeployLFJBase {
         console2.log("  asset:      ", vault.asset());
         console2.log("  tokenX:     ", address(vault.tokenX()));
         console2.log("  tokenY:     ", address(vault.tokenY()));
+        console2.log("  oracle:     ", address(vault.priceOracle()));
     }
 }

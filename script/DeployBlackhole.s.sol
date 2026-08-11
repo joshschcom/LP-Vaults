@@ -6,6 +6,7 @@ import {IERC20}                  from "@openzeppelin/contracts/token/ERC20/IERC2
 import {BlackholeStableVault}    from "../contracts/BlackholeStableVault.sol";
 import {IBlackholeRouter}        from "../contracts/interfaces/IBlackholeRouter.sol";
 import {IBlackholePair}          from "../contracts/interfaces/IBlackholePair.sol";
+import {IStableVaultOracle}      from "../contracts/interfaces/IStableVaultOracle.sol";
 
 /// @notice Deploy BlackholeStableVault.
 ///
@@ -13,6 +14,10 @@ import {IBlackholePair}          from "../contracts/interfaces/IBlackholePair.so
 ///    forge script script/DeployBlackhole.s.sol:DeployBlackholeMainnet \
 ///      --rpc-url avax --broadcast --verify \
 ///      --private-key $PRIVATE_KEY
+///
+///  Requires BLACKHOLE_PRICE_ORACLE to be an independently sourced oracle
+///  whose asset is USDC and pairedToken is EURC. A ChainlinkRatioOracle can be
+///  used once both Avalanche feed addresses have been independently verified.
 ///
 ///  How to find Blackhole addresses (they are not publicly documented):
 ///    A) Snowscan name-tag search: https://snowscan.xyz → search "Blackhole"
@@ -42,19 +47,26 @@ contract DeployBlackholeMainnet is Script {
         require(EURC_USDC_PAIR   != address(0), "set EURC_USDC_PAIR");
 
         address deployer = vm.envAddress("DEPLOYER");
+        address multisig = vm.envOr("MULTISIG", deployer);
+        address priceOracle = vm.envAddress("BLACKHOLE_PRICE_ORACLE");
+        require(multisig != address(0), "set MULTISIG");
+        require(priceOracle != address(0), "set BLACKHOLE_PRICE_ORACLE");
 
-        vm.startBroadcast();
+        vm.startBroadcast(deployer);
 
         BlackholeStableVault vault = new BlackholeStableVault(
             IERC20(USDC),
             IERC20(EURC),
             IBlackholeRouter(BLACKHOLE_ROUTER),
-            IBlackholePair(EURC_USDC_PAIR)
+            IBlackholePair(EURC_USDC_PAIR),
+            IStableVaultOracle(priceOracle)
         );
 
         // Conservative launch settings
         vault.setDepositCap(500_000e6); // 500k USDC
         vault.setSlippage(30);           // 0.3%
+        vault.setValuationHaircut(200);  // 2% conservative EURC exit value
+        vault.transferOwnership(multisig);
 
         vm.stopBroadcast();
 
@@ -63,5 +75,7 @@ contract DeployBlackholeMainnet is Script {
         console2.log("  EURC:   ", address(vault.EURC()));
         console2.log("  router: ", address(vault.router()));
         console2.log("  pair:   ", address(vault.pair()));
+        console2.log("  oracle: ", address(vault.priceOracle()));
+        console2.log("  owner:  ", vault.owner());
     }
 }

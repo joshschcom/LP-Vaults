@@ -7,6 +7,7 @@ import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transpa
 import {LFJStableVault} from "../contracts/LFJStableVault.sol";
 import {ILBRouter}      from "../contracts/interfaces/ILBRouter.sol";
 import {ILBPair}        from "../contracts/interfaces/ILBPair.sol";
+import {StableVaultOracleMock} from "./mocks/StableVaultOracleMock.sol";
 
 /// @dev Minimal factory interface — only what the test needs
 interface ILBFactory {
@@ -64,10 +65,20 @@ contract LFJStableVaultTest is Test {
 
     LFJStableVault vault;
     ILBPair        testPair;
+    StableVaultOracleMock oracle;
     address        alice  = makeAddr("alice");
     address        keeper = makeAddr("keeper");
 
     function setUp() public {
+        if (block.chainid != 43113) {
+            string memory rpcUrl = vm.envOr("FUJI_RPC", string(""));
+            if (bytes(rpcUrl).length == 0) {
+                vm.skip(true, "FUJI_RPC not configured");
+                return;
+            }
+            vm.createSelectFork(rpcUrl);
+        }
+
         // ── 1. Create fresh V2.2 USDT/USDC pair ─────────────────────────────
         ILBFactory factory = ILBFactory(LB_FACTORY);
 
@@ -137,8 +148,9 @@ contract LFJStableVaultTest is Test {
 
         // ── 3. Deploy vault proxy against the fresh V2.2 pair ────────────────
         LFJStableVault implementation = new LFJStableVault();
+        oracle = new StableVaultOracleMock(USDT_FUJI, USDC_FUJI);
         bytes memory initData = abi.encodeCall(
-            LFJStableVault.initialize,
+            LFJStableVault.initializeWithOracle,
             (
                 IERC20(USDT_FUJI), // ERC-4626 asset
                 IERC20(USDT_FUJI),
@@ -150,7 +162,9 @@ contract LFJStableVaultTest is Test {
                 address(this),
                 10_000e6,
                 2,
-                30
+                30,
+                oracle,
+                200
             )
         );
         TransparentUpgradeableProxy proxy =

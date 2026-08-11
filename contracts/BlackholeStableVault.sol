@@ -5,12 +5,14 @@ import {ERC4626}        from "@openzeppelin/contracts/token/ERC20/extensions/ERC
 import {ERC20}          from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20}         from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20}      from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Math}           from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Ownable}        from "@openzeppelin/contracts/access/Ownable.sol";
 import {Pausable}       from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {IBlackholeRouter} from "./interfaces/IBlackholeRouter.sol";
 import {IBlackholePair}   from "./interfaces/IBlackholePair.sol";
+import {IStableVaultOracle} from "./interfaces/IStableVaultOracle.sol";
 
 /// ============================================================
 /// @title  BlackholeStableVault
@@ -50,17 +52,27 @@ import {IBlackholePair}   from "./interfaces/IBlackholePair.sol";
 contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
+    uint256 private constant BPS = 10_000;
+
     // ─── Errors ──────────────────────────────────────────────────────────────
     error Vault__ZeroAmount();
     error Vault__DepositCapExceeded(uint256 cap, uint256 total);
     error Vault__SlippageTooHigh(uint256 bps);
     error Vault__InsufficientOutput(uint256 got, uint256 min);
     error Vault__NotStablePair();
+    error Vault__ZeroShares();
+    error Vault__ZeroAddress();
+    error Vault__InvalidPair();
+    error Vault__InvalidOracle(address oracle);
+    error Vault__UnsafeSwapQuote(uint256 routerMinimum, uint256 oracleMinimum);
+    error Vault__ValuationHaircutTooHigh(uint256 bps);
+    error Vault__ValuationHaircutBelowSlippage(uint256 haircutBps, uint256 slippageBps);
 
     // ─── Events ──────────────────────────────────────────────────────────────
     event DepositedUSDC(address indexed receiver, uint256 usdc, uint256 shares);
     event DepositedEURC(address indexed receiver, uint256 eurc, uint256 shares);
     event SlippageUpdated(uint256 newBps);
+    event ValuationHaircutUpdated(uint256 newBps);
     event DepositCapUpdated(uint256 newCap);
     event EmergencyWithdrawn(uint256 usdc, uint256 eurc);
 
@@ -68,6 +80,7 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
 
     IBlackholeRouter public immutable router;
     IBlackholePair   public immutable pair;
+    IStableVaultOracle public immutable priceOracle;
 
     IERC20 public immutable USDC; // asset() — 6 dec
     IERC20 public immutable EURC; // paired token — 6 dec
@@ -76,6 +89,10 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
 
     /// @notice Max slippage in basis points (default 30 = 0.3%)
     uint256 public slippageBps = 30;
+
+    /// @notice Haircut applied to all EURC value (default 200 = 2%).
+    /// @dev Must cover the configured execution slippage and expected exit cost.
+    uint256 public valuationHaircutBps = 200;
 
     /// @notice Hard cap on total assets (0 = uncapped)
     uint256 public depositCap;
@@ -86,31 +103,51 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     /// @param _eurc    EURC token (6 dec) — paired token in sAMM
     /// @param _router  Blackhole RouterV2
     /// @param _pair    Blackhole EURC/USDC sAMM pair (stable = true)
+    /// @param _priceOracle Independent EURC/USDC valuation oracle
     constructor(
         IERC20 _usdc,
         IERC20 _eurc,
         IBlackholeRouter _router,
-        IBlackholePair _pair
+        IBlackholePair _pair,
+        IStableVaultOracle _priceOracle
     )
         ERC4626(IERC20(address(_usdc)))
         ERC20("Peridot Blackhole USDC/EURC Vault", "pBH-USDC")
         Ownable(msg.sender)
     {
+        if (
+            address(_usdc) == address(0) || address(_eurc) == address(0) || address(_router) == address(0)
+                || address(_pair) == address(0) || address(_priceOracle) == address(0)
+        ) revert Vault__ZeroAddress();
         if (!_pair.stable()) revert Vault__NotStablePair();
+        address token0 = _pair.token0();
+        address token1 = _pair.token1();
+        if (
+            !(
+                (token0 == address(_usdc) && token1 == address(_eurc))
+                    || (token0 == address(_eurc) && token1 == address(_usdc))
+            )
+        ) revert Vault__InvalidPair();
+        if (_priceOracle.asset() != address(_usdc) || _priceOracle.pairedToken() != address(_eurc)) {
+            revert Vault__InvalidOracle(address(_priceOracle));
+        }
 
         USDC   = _usdc;
         EURC   = _eurc;
         router = _router;
         pair   = _pair;
+        priceOracle = _priceOracle;
     }
 
     // =========================================================================
     // ERC-4626 OVERRIDES
     // =========================================================================
 
-    /// @notice Total USDC value managed by the vault (idle + LP value)
+    /// @notice Conservative USDC liquidation value of idle balances and LP.
     function totalAssets() public view override returns (uint256) {
-        return USDC.balanceOf(address(this)) + _lpValueInUSDC();
+        (uint256 lpUsdc, uint256 lpEurc) = _lpTokenAmounts();
+        uint256 managedEurc = EURC.balanceOf(address(this)) + lpEurc;
+        return USDC.balanceOf(address(this)) + lpUsdc + _eurcLiquidationValue(managedEurc);
     }
 
     function maxDeposit(address) public view override returns (uint256) {
@@ -124,6 +161,53 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
         return convertToShares(maxDeposit(receiver));
     }
 
+    /// @dev A conservative preview may be lower than the USDC actually realized
+    ///      when the final holder exits. Return and transfer that full realized
+    ///      balance so no shareholder assets remain after all shares are burned.
+    function redeem(uint256 shares, address receiver, address owner_)
+        public
+        override
+        returns (uint256 assets)
+    {
+        uint256 maxShares = maxRedeem(owner_);
+        if (shares > maxShares) {
+            revert ERC4626ExceededMaxRedeem(owner_, shares, maxShares);
+        }
+
+        assets = previewRedeem(shares);
+        uint256 supply = totalSupply();
+        if (shares > 0 && shares == supply) {
+            return _redeemAll(_msgSender(), receiver, owner_, shares, supply);
+        }
+
+        _withdraw(_msgSender(), receiver, owner_, assets, shares);
+    }
+
+    /// @dev If an exact-asset withdrawal would consume the full conservatively
+    ///      priced supply, first realize the strategy and recompute the shares
+    ///      against actual USDC. Any execution surplus remains backed by shares
+    ///      instead of becoming ownerless after the withdrawal.
+    function withdraw(uint256 assets, address receiver, address owner_)
+        public
+        override
+        returns (uint256 shares)
+    {
+        uint256 maxAssets = maxWithdraw(owner_);
+        if (assets > maxAssets) {
+            revert ERC4626ExceededMaxWithdraw(owner_, assets, maxAssets);
+        }
+
+        shares = previewWithdraw(assets);
+        uint256 supply = totalSupply();
+        if (shares > 0 && shares == supply) {
+            return _withdrawExactAfterFullLiquidation(
+                _msgSender(), receiver, owner_, assets, supply
+            );
+        }
+
+        _withdraw(_msgSender(), receiver, owner_, assets, shares);
+    }
+
     /// @dev Standard USDC deposit — swaps optimal fraction to EURC then LPs.
     function _deposit(
         address caller,
@@ -132,12 +216,19 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
         uint256 shares
     ) internal override nonReentrant whenNotPaused {
         if (assets == 0) revert Vault__ZeroAmount();
+        if (shares == 0) revert Vault__ZeroShares();
         if (depositCap > 0 && totalAssets() + assets > depositCap) {
             revert Vault__DepositCapExceeded(depositCap, totalAssets() + assets);
         }
 
         super._deposit(caller, receiver, assets, shares);
         _deployToLP(USDC.balanceOf(address(this)));
+
+        uint256 managedAfter = totalAssets();
+        if (depositCap > 0 && managedAfter > depositCap) {
+            revert Vault__DepositCapExceeded(depositCap, managedAfter);
+        }
+        emit DepositedUSDC(receiver, assets, shares);
     }
 
     function _withdraw(
@@ -148,10 +239,44 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
         uint256 shares
     ) internal override nonReentrant {
         uint256 supply = totalSupply();
-        if (supply > 0) {
-            _withdrawFromLP(shares, supply);
-        }
+        _liquidateWithdrawal(shares, supply);
         super._withdraw(caller, receiver, owner_, assets, shares);
+    }
+
+    function _redeemAll(
+        address caller,
+        address receiver,
+        address owner_,
+        uint256 shares,
+        uint256 supply
+    ) internal nonReentrant returns (uint256 assets) {
+        _liquidateWithdrawal(shares, supply);
+        assets = USDC.balanceOf(address(this));
+        super._withdraw(caller, receiver, owner_, assets, shares);
+    }
+
+    function _withdrawExactAfterFullLiquidation(
+        address caller,
+        address receiver,
+        address owner_,
+        uint256 assets,
+        uint256 supply
+    ) internal nonReentrant returns (uint256 shares) {
+        _liquidateWithdrawal(supply, supply);
+        shares = previewWithdraw(assets);
+        super._withdraw(caller, receiver, owner_, assets, shares);
+    }
+
+    function _liquidateWithdrawal(uint256 shares, uint256 supply) internal {
+        if (supply == 0 || shares == 0) return;
+
+        uint256 idleEurc = EURC.balanceOf(address(this));
+        uint256 eurcFromLP = _withdrawFromLP(shares, supply);
+        uint256 idleEurcToSwap = shares == supply
+            ? idleEurc
+            : Math.mulDiv(idleEurc, shares, supply);
+        uint256 eurcToSwap = idleEurcToSwap + eurcFromLP;
+        if (eurcToSwap > 0) _swapEURCtoUSDC(eurcToSwap);
     }
 
     // =========================================================================
@@ -169,21 +294,40 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     {
         if (eurcAmount == 0) revert Vault__ZeroAmount();
 
+        // ERC-4626 deposits price shares before the transferred assets enter
+        // totalAssets(). Preserve that invariant for this alternate entry path.
+        uint256 assetsBefore = totalAssets();
+        uint256 supplyBefore = totalSupply();
+
         EURC.safeTransferFrom(msg.sender, address(this), eurcAmount);
 
         // Swap all EURC → USDC at sAMM price
         uint256 usdcOut = _swapEURCtoUSDC(eurcAmount);
 
-        // Now deposit the USDC on behalf of receiver
-        shares = convertToShares(usdcOut);
+        uint256 virtualShares = 10 ** _decimalsOffset();
+        shares = Math.mulDiv(
+            usdcOut,
+            supplyBefore + virtualShares,
+            assetsBefore + 1,
+            Math.Rounding.Floor
+        );
+        if (shares == 0) revert Vault__ZeroShares();
 
-        if (depositCap > 0 && totalAssets() + usdcOut > depositCap) {
-            revert Vault__DepositCapExceeded(depositCap, totalAssets() + usdcOut);
-        }
+        // Share pricing deliberately uses the pre-conversion state. Any LP fee
+        // earned by the vault during this atomic conversion is consequently
+        // shared pro rata by incumbents and the newly minted shares.
 
         _mint(receiver, shares);
         _deployToLP(USDC.balanceOf(address(this)));
 
+        // Check the actual strategy value after both swaps and LP deployment.
+        // Any failure reverts the complete EURC transfer/conversion atomically.
+        uint256 managedAfter = totalAssets();
+        if (depositCap > 0 && managedAfter > depositCap) {
+            revert Vault__DepositCapExceeded(depositCap, managedAfter);
+        }
+
+        emit Deposit(msg.sender, receiver, usdcOut, shares);
         emit DepositedEURC(receiver, eurcAmount, shares);
     }
 
@@ -227,13 +371,15 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
         EURC.forceApprove(address(router), 0);
     }
 
-    /// @dev Remove `shares/totalShares` of LP, swap EURC proceeds back to USDC.
-    function _withdrawFromLP(uint256 shares, uint256 totalShares) internal {
+    /// @dev Remove `shares/totalShares` of LP and return the EURC received.
+    ///      The caller combines it with the holder's idle EURC slice so the
+    ///      exit uses one price-impacting swap rather than two.
+    function _withdrawFromLP(uint256 shares, uint256 totalShares) internal returns (uint256 eurcReceived) {
         uint256 lpBalance = pair.balanceOf(address(this));
-        if (lpBalance == 0) return;
+        if (lpBalance == 0) return 0;
 
-        uint256 lpToRemove = (lpBalance * shares) / totalShares;
-        if (lpToRemove == 0) return;
+        uint256 lpToRemove = shares == totalShares ? lpBalance : Math.mulDiv(lpBalance, shares, totalShares);
+        if (lpToRemove == 0) return 0;
 
         // Compute expected outputs for slippage floor
         uint256 supply = pair.totalSupply();
@@ -244,12 +390,12 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
             ? (res0, res1)
             : (res1, res0);
 
-        uint256 expUsdc = (resUsdc * lpToRemove) / supply;
-        uint256 expEurc = (resEurc * lpToRemove) / supply;
+        uint256 expUsdc = Math.mulDiv(resUsdc, lpToRemove, supply);
+        uint256 expEurc = Math.mulDiv(resEurc, lpToRemove, supply);
 
         pair.approve(address(router), lpToRemove);
 
-        (uint256 gotUsdc, uint256 gotEurc) = router.removeLiquidity(
+        (, eurcReceived) = router.removeLiquidity(
             address(USDC),
             address(EURC),
             true,
@@ -259,29 +405,20 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
             address(this),
             block.timestamp
         );
-
-        // Swap EURC proceeds → USDC
-        if (gotEurc > 0) {
-            (uint256 quotedBack,) = router.getAmountOut(gotEurc, address(EURC), address(USDC), true);
-            _swapEURCtoUSDC_min(gotEurc, _applySlippage(quotedBack));
-        }
-
-        // gotUsdc sits in the vault; ERC-4626 _withdraw will send it out
+        pair.approve(address(router), 0);
     }
 
     // =========================================================================
     // VALUATION — VIEW
     // =========================================================================
 
-    /// @dev LP value in USDC terms.
-    ///      Both USDC and EURC are 6 dec so no normalisation needed.
-    ///      At 1:1 peg this is exact; a depeg will over/understate value.
-    function _lpValueInUSDC() internal view returns (uint256) {
+    /// @dev Principal token amounts represented by the vault's LP balance.
+    function _lpTokenAmounts() internal view returns (uint256 shareUsdc, uint256 shareEurc) {
         uint256 lpBalance = pair.balanceOf(address(this));
-        if (lpBalance == 0) return 0;
+        if (lpBalance == 0) return (0, 0);
 
         uint256 supply = pair.totalSupply();
-        if (supply == 0) return 0;
+        if (supply == 0) return (0, 0);
 
         (uint256 res0, uint256 res1,) = pair.getReserves();
 
@@ -290,11 +427,15 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
             ? (res0, res1)
             : (res1, res0);
 
-        // Pro-rata share at 1:1 price (EURC ≈ USDC, both 6 dec)
-        uint256 shareUsdc = (resUsdc * lpBalance) / supply;
-        uint256 shareEurc = (resEurc * lpBalance) / supply;
+        shareUsdc = Math.mulDiv(resUsdc, lpBalance, supply);
+        shareEurc = Math.mulDiv(resEurc, lpBalance, supply);
+    }
 
-        return shareUsdc + shareEurc;
+    /// @dev Independent oracle value with an exit-cost haircut. Router spot
+    ///      quotes are intentionally excluded from ERC-4626 share accounting.
+    function _eurcLiquidationValue(uint256 eurcAmount) internal view returns (uint256) {
+        if (eurcAmount == 0) return 0;
+        return _applyValuationHaircut(priceOracle.quotePairToAsset(eurcAmount));
     }
 
     // =========================================================================
@@ -305,6 +446,9 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
         internal
         returns (uint256 amountOut)
     {
+        uint256 oracleMinimum = _applyValuationHaircut(priceOracle.quoteAssetToPair(amountIn));
+        if (minOut < oracleMinimum) revert Vault__UnsafeSwapQuote(minOut, oracleMinimum);
+
         USDC.forceApprove(address(router), amountIn);
 
         IBlackholeRouter.route[] memory routes = new IBlackholeRouter.route[](1);
@@ -333,7 +477,10 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
 
     function _swapEURCtoUSDC(uint256 amountIn) internal returns (uint256 amountOut) {
         (uint256 quoted,) = router.getAmountOut(amountIn, address(EURC), address(USDC), true);
-        return _swapEURCtoUSDC_min(amountIn, _applySlippage(quoted));
+        uint256 minOut = _applySlippage(quoted);
+        uint256 oracleMinimum = _eurcLiquidationValue(amountIn);
+        if (minOut < oracleMinimum) revert Vault__UnsafeSwapQuote(minOut, oracleMinimum);
+        return _swapEURCtoUSDC_min(amountIn, minOut);
     }
 
     function _swapEURCtoUSDC_min(uint256 amountIn, uint256 minOut)
@@ -371,7 +518,11 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     // =========================================================================
 
     function _applySlippage(uint256 amount) internal view returns (uint256) {
-        return (amount * (10_000 - slippageBps)) / 10_000;
+        return Math.mulDiv(amount, BPS - slippageBps, BPS);
+    }
+
+    function _applyValuationHaircut(uint256 amount) internal view returns (uint256) {
+        return Math.mulDiv(amount, BPS - valuationHaircutBps, BPS);
     }
 
     // =========================================================================
@@ -380,7 +531,7 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
 
     /// @notice Pull all LP and hold tokens idle in the vault (no swap back).
     function emergencyWithdrawLP() external onlyOwner {
-        _pause();
+        if (!paused()) _pause();
 
         uint256 lpBalance = pair.balanceOf(address(this));
         if (lpBalance == 0) return;
@@ -402,9 +553,12 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
     }
 
     /// @notice Recover tokens accidentally sent to this contract.
-    ///         Cannot sweep USDC or EURC.
+    ///         Cannot sweep either managed token or the backing LP token.
     function sweep(IERC20 token, address to, uint256 amount) external onlyOwner {
-        require(token != USDC && token != EURC, "cannot sweep vault tokens");
+        require(
+            address(token) != address(USDC) && address(token) != address(EURC) && address(token) != address(pair),
+            "cannot sweep vault tokens"
+        );
         token.safeTransfer(to, amount);
     }
 
@@ -413,8 +567,18 @@ contract BlackholeStableVault is ERC4626, Ownable, Pausable, ReentrancyGuard {
 
     function setSlippage(uint256 _bps) external onlyOwner {
         if (_bps > 200) revert Vault__SlippageTooHigh(_bps);
+        if (_bps > valuationHaircutBps) {
+            revert Vault__ValuationHaircutBelowSlippage(valuationHaircutBps, _bps);
+        }
         slippageBps = _bps;
         emit SlippageUpdated(_bps);
+    }
+
+    function setValuationHaircut(uint256 _bps) external onlyOwner {
+        if (_bps > 2_000) revert Vault__ValuationHaircutTooHigh(_bps);
+        if (_bps < slippageBps) revert Vault__ValuationHaircutBelowSlippage(_bps, slippageBps);
+        valuationHaircutBps = _bps;
+        emit ValuationHaircutUpdated(_bps);
     }
 
     function setDepositCap(uint256 _cap) external onlyOwner {
