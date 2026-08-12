@@ -97,14 +97,14 @@ contract PharaohDeploymentMainnetForkTest is Test {
 
     function test_proposedUSDCStagedBatchRoundTrip() public {
         _requireFork();
-        uint256 redeemed = _stagedRoundTrip(USDC_VAULT, USDC, 20e6, 40e6);
+        uint256 redeemed = _stagedRoundTrip(USDC_VAULT, USDC, 20e6);
         console2.log("proposed 20-USDC stage round trip", redeemed);
         assertGt(redeemed, 19.6e6);
     }
 
     function test_proposedWAVAXStagedBatchRoundTrip() public {
         _requireFork();
-        uint256 redeemed = _stagedRoundTrip(WAVAX_VAULT, WAVAX, 0.75 ether, 2 ether);
+        uint256 redeemed = _stagedRoundTrip(WAVAX_VAULT, WAVAX, 0.75 ether);
         console2.log("proposed 0.75-WAVAX stage round trip", redeemed);
         assertGt(redeemed, 0.71 ether);
     }
@@ -273,7 +273,7 @@ contract PharaohDeploymentMainnetForkTest is Test {
         vm.stopPrank();
     }
 
-    function _stagedRoundTrip(PharaohLiquidityVault vault, address asset, uint256 amount, uint256 temporaryCap)
+    function _stagedRoundTrip(PharaohLiquidityVault vault, address asset, uint256 amount)
         private
         returns (uint256 redeemed)
     {
@@ -285,7 +285,9 @@ contract PharaohDeploymentMainnetForkTest is Test {
 
         vm.startPrank(SAFE);
         IERC20(asset).approve(address(vault), amount);
-        vault.setDepositCap(temporaryCap);
+        // Zero means unlimited. This is safe only because all four Safe calls
+        // execute atomically and the final call restores the one-raw-unit cap.
+        vault.setDepositCap(0);
         uint256 stagedShares = vault.deposit(amount, SAFE);
         vault.setDepositCap(1);
         vm.stopPrank();

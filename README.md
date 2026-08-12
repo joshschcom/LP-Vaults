@@ -234,9 +234,14 @@ Do not execute if Safe shows a different full target address, decoded function, 
 **Post-upgrade gate passed; Safe funding remains required.** The fresh fork at block `92637472` passed 13/13 live-state, partial-exit, staged-round-trip, live-pool swap, storage, risk-migration, and lending-oracle tests. Read-only live calls also successfully simulated partial redemptions from both upgraded proxies. The smaller next controlled step is 20 USDC and 0.75 WAVAX. These are capital additions, not public cap increases. Each checksummed Transaction Builder file uses four calls in one atomic Safe transaction:
 
 1. Approve exactly the staged asset amount.
-2. Temporarily raise that vault's cap to 40 USDC or 2 WAVAX.
+2. Temporarily set the cap to zero (the vault's unlimited sentinel) inside the atomic batch so ordinary fee accrual cannot consume fixed headroom.
 3. Deposit the staged amount with the Safe as receiver.
 4. Restore the cap to one raw unit.
+
+The zero-cap sentinel is safe only as part of this exact atomic Safe batch: no
+external transaction can interleave, and failure of the deposit or final cap
+restore reverts every call, including the temporary unlimited setting. Never
+submit these four calls as separate Safe transactions.
 
 The prepared post-upgrade files are `safe/Pharaoh-USDC-stage-20-43114.json` and `safe/Pharaoh-WAVAX-stage-0.75-43114.json`. Validate all retained Safe files with:
 

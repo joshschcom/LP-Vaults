@@ -4,11 +4,11 @@
   "createdAt": 1786541000000,
   "meta": {
     "name": "Pharaoh USDC 20-USDC staged deposit",
-    "description": "POST-UPGRADE READY; fund the Safe with exactly 20 USDC before execution. Approve exactly 20 USDC, temporarily raise the cap to 40 USDC, deposit to the Safe, and atomically close public deposits with a cap of 1 raw unit.",
+    "description": "POST-UPGRADE READY; fund the Safe with exactly 20 USDC before execution. Approve exactly 20 USDC, temporarily disable the cap only inside this atomic batch, deposit to the Safe, and restore closed public deposits with a cap of 1 raw unit.",
     "txBuilderVersion": "2.0.1",
     "createdFromSafeAddress": "0x80f4207e0810EA2C39B6C8387E5ffC6FF34dfB12",
     "createdFromOwnerAddress": "",
-    "checksum": "0x1e30499e8d1148ecaa2689425be5393e815ee952ff387b9b96878660f29f1878"
+    "checksum": "0xf78d265f54c8bd800007744792de15902c153f986c86d444cbc1e16256fb868c"
   },
   "transactions": [
     {
@@ -19,7 +19,7 @@
     {
       "to": "0x855bF832f26a294d28500db59eE941dE3d654129",
       "value": "0",
-      "data": "0x866512030000000000000000000000000000000000000000000000000000000002625a00"
+      "data": "0x866512030000000000000000000000000000000000000000000000000000000000000000"
     },
     {
       "to": "0x855bF832f26a294d28500db59eE941dE3d654129",

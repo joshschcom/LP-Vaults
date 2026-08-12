@@ -4,11 +4,11 @@
   "createdAt": 1786541000001,
   "meta": {
     "name": "Pharaoh WAVAX 0.75-WAVAX staged deposit",
-    "description": "POST-UPGRADE READY; fund the Safe with exactly 0.75 WAVAX before execution. Approve exactly 0.75 WAVAX, temporarily raise the cap to 2 WAVAX, deposit to the Safe, and atomically close public deposits with a cap of 1 raw unit.",
+    "description": "POST-UPGRADE READY; fund the Safe with exactly 0.75 WAVAX before execution. Approve exactly 0.75 WAVAX, temporarily disable the cap only inside this atomic batch, deposit to the Safe, and restore closed public deposits with a cap of 1 raw unit.",
     "txBuilderVersion": "2.0.1",
     "createdFromSafeAddress": "0x80f4207e0810EA2C39B6C8387E5ffC6FF34dfB12",
     "createdFromOwnerAddress": "",
-    "checksum": "0x6151becbf13cac315463044dd99e3900c275d13bef571c6d195fecc6b764107b"
+    "checksum": "0x0818c79a797e4870558ba9accbd07b683e8f5ca32d0dea6db5e9385086816f62"
   },
   "transactions": [
     {
@@ -19,7 +19,7 @@
     {
       "to": "0xe9a53f0077f9cf767a95Ce75Da483E906eE190E8",
       "value": "0",
-      "data": "0x866512030000000000000000000000000000000000000000000000001bc16d674ec80000"
+      "data": "0x866512030000000000000000000000000000000000000000000000000000000000000000"
     },
     {
       "to": "0xe9a53f0077f9cf767a95Ce75Da483E906eE190E8",
