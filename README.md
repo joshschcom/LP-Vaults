@@ -16,7 +16,8 @@ Blackhole, LFJ, WBTC/BTC.b, and USDC/AUSD are out of scope for this first lendin
 - Avalanche C-Chain RPC: `https://api.avax.network/ext/bc/C/rpc`
 - Owner Safe: `0x80f4207e0810EA2C39B6C8387E5ffC6FF34dfB12`
 - Keeper: `0x94696d767e65a75581145646960FA0eC886cE5d2`
-- Implementation: `0x3E931977EE59B23bD42F6b82b7Dc16128942A5a5`
+- Reviewed v2 implementation: `0x87C2C3bE37B2D71Ca85D2D950F0eed4532410CEa`
+- Legacy implementation: `0x3E931977EE59B23bD42F6b82b7Dc16128942A5a5`
 - USDC vault proxy: `0x855bF832f26a294d28500db59eE941dE3d654129`
 - USDC vault ProxyAdmin: `0x2DD4191B2944396B5853f4219E829f01636F65cf`
 - USDC ratio oracle: `0xe6060635dfdDd495ca22b828e144AB8411c8a431`
@@ -36,15 +37,73 @@ Blackhole, LFJ, WBTC/BTC.b, and USDC/AUSD are out of scope for this first lendin
 - sAVAX/WAVAX pool: `0x65B9016c376604Fe0aF38c1E336Ffcec0F8ecBbD`
 - Chainlink USDC/USD: `0xF096872672F44d6EBA71458D74fe67F9a77a23B9`
 - Chainlink USDT/USD: `0xEBE676ee90Fe1112671f19b6B7459bC678B67e8a`
+- Chainlink AVAX/USD: `0x0A77230d17318075983913bC2145DB16C7366156`
 
 Both assets are `token1` in their selected pool. The USDC vault uses the ratio of the two Chainlink USD feeds. The WAVAX vault values sAVAX through BENQI's protocol exchange rate.
 
-The addresses above still point to the original implementation until the Safe executes the reviewed v2 upgrade. The v2 migration must use `ProxyAdmin.upgradeAndCall` with `initializeV2RiskParameters(oracleDeviationBps, slippageBps, haircutBps)` as calldata. Its target risk settings are:
+Both proxies were atomically upgraded to the reviewed v2 implementation in Avalanche transaction `0xff6646778497fcf21b817d956c7eda9c0800fa836a978dc388e7184df2ae65b1` at block `92556750`. The Safe batch called each `ProxyAdmin.upgradeAndCall` with `initializeV2RiskParameters(oracleDeviationBps, slippageBps, haircutBps)` as calldata. The resulting risk settings are:
 
 - USDC/USDt: 30-tick spot/TWAP bound, 30-bps oracle bound, 100-bps swap tolerance, and 100-bps paired-value haircut.
 - sAVAX/WAVAX: 100-tick spot/TWAP bound, 100-bps oracle bound, 300-bps swap tolerance, and 300-bps paired-value haircut.
 
-The implementation rejects configurations whose swap tolerance does not cover the oracle bound, a conservative conversion of the tick bound, and an execution buffer; the valuation haircut must also cover the full swap tolerance. Do not increase exposure beyond the canaries or list the shares in a lending market until the implementation upgrade and both post-upgrade canary tests pass.
+The implementation rejects configurations whose swap tolerance does not cover the oracle bound, a conservative conversion of the tick bound, and an execution buffer; the valuation haircut must also cover the full swap tolerance. The upgrade receipt contains both proxy `Upgraded` events and the Safe `ExecutionSuccess` event. Post-upgrade canaries were executed successfully:
+
+- 10 USDC: Safe transaction `0x1266f9fd0811ded7ef7ca5478c67ecea4d15b1e98b9d72ed3f48e4d95bbd9ebc`.
+- 1 WAVAX: Safe transaction `0xd1c73fcfab833db41dc1f904ec488eb472badad96310eb6b286cc8885c77c6f6`.
+
+Both vaults are active and in range, all outstanding shares are owned by the Safe, asset allowances are zero, and each final deposit cap is one raw unit so public deposits remain closed. Continue the time-series canary monitoring before listing the shares in a lending market.
+
+### Partial-exit hotfix gate
+
+Do not add the proposed 100-USDC or 5-WAVAX tranche and do not list either share token in a lending market yet. Post-canary fork testing found that the current implementation's partial asset-only redemption calls Pharaoh's deployed `exactOutputSingle` route. The verified upstream router packs that route in the wrong field order, derives a non-contract pool address, and reverts. A sole holder's full redemption still works because it uses the separate `exactInputSingle` path, but the staged-tranche round trip and any multi-holder or lending-market use require partial exits.
+
+The candidate hotfix removes the exact-output dependency. It uses an oracle-derived, slippage-capped exact-input amount and requires the router to deliver the complete asset shortfall; otherwise the entire redemption reverts without burning shares. At pinned post-canary block `92626200`, the fork suite upgrades both live proxies locally without changing storage, then passes the 10-USDC/1-WAVAX partial canaries and the proposed 100-USDC/5-WAVAX deposit-and-partial-redemption sequences. The candidate runtime is 24,153 bytes, 423 bytes below EIP-170.
+
+The guarded deployment simulation is:
+
+```bash
+make deploy-pharaoh-hotfix-dry-run \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc \
+  DEPLOYER=0x94696d767e65a75581145646960FA0eC886cE5d2
+```
+
+Only after the final commit is merged and both external scans are clear, deploy the implementation with the encrypted keystore:
+
+```bash
+make deploy-pharaoh-hotfix-mainnet \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc \
+  DEPLOYER=0x94696d767e65a75581145646960FA0eC886cE5d2 \
+  SIGNER_ARGS='--account robinhood-deployer --verifier sourcify'
+
+make prepare-pharaoh-hotfix \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc \
+  NEW_IMPLEMENTATION=0xYourVerifiedHotfixImplementation
+```
+
+The deployment changes no proxy state. The Safe must then execute the two generated `ProxyAdmin.upgradeAndCall(proxy, implementation, 0x)` calls atomically, each with native value zero. Re-run a freshly pinned fork suite and the PnL snapshot before either staged deposit file becomes executable.
+
+The guarded single-use commands used for the implementation deployment were:
+
+```bash
+make deploy-pharaoh-upgrade-dry-run \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc \
+  DEPLOYER=0x94696d767e65a75581145646960FA0eC886cE5d2
+
+make deploy-pharaoh-upgrade-mainnet \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc \
+  DEPLOYER=0x94696d767e65a75581145646960FA0eC886cE5d2 \
+  SIGNER_ARGS='--account robinhood-deployer --verifier sourcify'
+```
+
+The target deployed no proxies and changed no vault state. Before the Safe transaction, the payloads were reproduced and validated from the deployed bytecode with:
+
+```bash
+make prepare-pharaoh-upgrade \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc \
+  NEW_IMPLEMENTATION=0x87C2C3bE37B2D71Ca85D2D950F0eed4532410CEa
+```
+
+The executed, checksummed Safe Transaction Builder file is retained at `safe/Pharaoh-v2-upgrade-43114.json`. The deployment and preparation targets now intentionally reject reuse because their pre-upgrade guard requires both proxies to reference the legacy implementation. Never call either proxy directly and never separate an implementation upgrade from its migration initializer.
 
 ## Lending-Market Accounting
 
@@ -62,6 +121,8 @@ Asset-denominated `deposit()` is the supported entry point. Exact-share `mint()`
 Pharaoh's position manager can transfer PHAR and xPHAR to the vault automatically when liquidity changes. These and any other unpriced tokens held by the vault are excluded from `totalAssets()`. The v2 implementation deliberately omits reward forwarding and xPHAR conversion to preserve a small, reviewable core below EIP-170; harvest those balances before upgrading if the original implementation has accrued them. A dedicated, reviewed reward-conversion module is required before incentives are included in PnL or public-launch assumptions.
 
 For collateral valuation, lending markets should use the vault proxy's standard ERC-4626 `convertToAssets()` path and preserve their own collateral-factor and liquidation haircuts. `totalAssets()` enforces the spot/TWAP/independent-oracle bounds. Oracle staleness, unsafe price divergence, or insufficient Pharaoh observation history intentionally makes valuation revert rather than silently use spot. The lending integration must treat that revert as an oracle outage and have a tested market-pause/guardian procedure; fail-closed valuation trades availability for manipulation resistance.
+
+`PeridotPharaohShareOracle` is the prepared Peridot adapter. It delegates every unregistered market to Peridot's existing oracle and dynamically prices only registered Pharaoh vault shares from conservative `convertToAssets()` accounting plus the asset's Chainlink USD feed. It returns zero for a registered vault when the vault price check or Chainlink read is unsafe. Crucially, it uses Compound/Peridot's `10^(36-underlyingDecimals)` oracle scaling: a six-decimal USDC vault share is priced around `1e30`, while an 18-decimal WAVAX vault share is priced around the AVAX/USD value at `1e18` scale. Do not replace the live Peridot oracle or list a market until the actual Avalanche Peridottroller, base oracle, rate model, admin, and guardian addresses have been independently verified on-chain.
 
 `emergencyExit()` removes the NFT liquidity but deliberately does not bypass the price checks in the standard asset-only `redeem()` or convert the paired token. If Pharaoh lacks enough external liquidity, or a pool/TWAP/oracle check fails, holders can instead call `redeemInKind()` to burn shares for proportional WAVAX/USDC and sAVAX/USDt balances without a swap or price-feed dependency. Integrations must explicitly support that two-token emergency payout; it is a liveness escape hatch, not ERC-4626's asset-only redemption path.
 
@@ -166,12 +227,38 @@ WAVAX batch:
 
 Do not execute if Safe shows a different full target address, decoded function, receiver, amount, network, or nonzero native value. After each batch, run `make pharaoh-status` and confirm the Safe owns all shares, `tokenId` is nonzero, `paused` is false, `depositCap` is `1`, and the position is in range.
 
+### Proposed staged deposits
+
+**Blocked pending the partial-exit implementation deployment and Safe upgrade described above.** After that gate clears, the next controlled step is 100 USDC and 5 WAVAX. These are capital additions, not public cap increases. Each checksummed Transaction Builder file uses four calls in one atomic Safe transaction:
+
+1. Approve exactly the staged asset amount.
+2. Temporarily raise that vault's cap to 200 USDC or 10 WAVAX.
+3. Deposit the staged amount with the Safe as receiver.
+4. Restore the cap to one raw unit.
+
+The prepared-but-blocked files are `safe/Pharaoh-USDC-stage-100-43114.json` and `safe/Pharaoh-WAVAX-stage-5-43114.json`. Validate all retained Safe files with:
+
+```bash
+make check-pharaoh-safe-batches
+```
+
+Fund the Safe with exactly 100 USDC and 5 WAVAX before importing the corresponding files. Execute USDC and WAVAX as separate Safe batches, then immediately run the status and snapshot commands. After both execute, use total cost bases of 110 USDC and 6 WAVAX:
+
+```bash
+USDC_COST_BASIS_RAW=110000000 \
+WAVAX_COST_BASIS_RAW=6000000000000000000 \
+make pharaoh-pnl-snapshot \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc
+```
+
+The finalized-block fork suite reproduces each exact approve/cap/deposit/close sequence and a partial redemption. Do not execute a batch if the live position is out of range, a fresh snapshot cannot simulate redemption, the Safe balance is insufficient, or either fork test fails at a newly pinned finalized block.
+
 ## Pharaoh Launch Checklist
 
 Before listing either proxy in a lending market:
 
 - Run the full unit suite and current-state mainnet fork suite.
-- Build with the pinned Foundry settings and confirm `PharaohLiquidityVault` remains below the 24,576-byte EIP-170 runtime limit. The deployed build is 24,369 bytes, leaving only 207 bytes of margin.
+- Build with the pinned Foundry settings and confirm `PharaohLiquidityVault` remains below the 24,576-byte EIP-170 runtime limit. The partial-exit candidate is 24,153 bytes, leaving 423 bytes of margin.
 - Run an external smart-contract audit; this repository is not an audit.
 - Confirm the multisig owns the vault and generated `ProxyAdmin`.
 - If the owner is described as a multisig, confirm it has multiple owners and a threshold greater than one before assigning production ownership.

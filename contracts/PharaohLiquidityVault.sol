@@ -661,25 +661,16 @@ contract PharaohLiquidityVault is
 
         uint256 shortfall = requiredAssets - available;
         uint256 expectedPairIn = priceOracle.quoteAssetToPair(shortfall);
-        uint256 maxPairIn = _grossUpSlippage(expectedPairIn);
+        uint256 pairIn = _grossUpSlippage(expectedPairIn);
         uint256 pairBalance = pairedToken.balanceOf(address(this));
-        if (maxPairIn > pairBalance) maxPairIn = pairBalance;
-        if (maxPairIn == 0) revert Vault__InsufficientAssets(available, requiredAssets);
+        if (pairIn > pairBalance) pairIn = pairBalance;
+        if (pairIn == 0) revert Vault__InsufficientAssets(available, requiredAssets);
 
-        pairedToken.forceApprove(address(swapRouter), maxPairIn);
-        swapRouter.exactOutputSingle(
-            IPharaohSwapRouter.ExactOutputSingleParams({
-                tokenIn: address(pairedToken),
-                tokenOut: asset(),
-                tickSpacing: tickSpacing,
-                recipient: address(this),
-                deadline: block.timestamp,
-                amountOut: shortfall,
-                amountInMaximum: maxPairIn,
-                sqrtPriceLimitX96: 0
-            })
-        );
-        pairedToken.forceApprove(address(swapRouter), 0);
+        // Pharaoh's deployed Ramses router constructs an invalid packed path
+        // in exactOutputSingle. Use its working exact-input path instead. The
+        // oracle-derived input is capped by the configured slippage allowance,
+        // and the router must realize the complete withdrawal shortfall.
+        _swapExactInput(pairedToken, assetToken, pairIn, shortfall);
 
         available = assetToken.balanceOf(address(this));
         if (available < requiredAssets) revert Vault__InsufficientAssets(available, requiredAssets);

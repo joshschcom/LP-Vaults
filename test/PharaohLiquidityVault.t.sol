@@ -115,6 +115,7 @@ contract MockPharaohFactory is IPharaohFactory {
 
                 address public immutable override deployer;
                 bool public swapsDisabled;
+                uint16 public outputBps = 10_000;
 
                 constructor(address deployer_) {
                     deployer = deployer_;
@@ -122,6 +123,11 @@ contract MockPharaohFactory is IPharaohFactory {
 
                 function setSwapsDisabled(bool disabled) external {
                     swapsDisabled = disabled;
+                }
+
+                function setOutputBps(uint16 newOutputBps) external {
+                    require(newOutputBps <= 10_000, "invalid output bps");
+                    outputBps = newOutputBps;
                 }
 
                 function exactInputSingle(ExactInputSingleParams calldata params)
@@ -132,22 +138,9 @@ contract MockPharaohFactory is IPharaohFactory {
                 {
                     require(!swapsDisabled, "swaps disabled");
                     IERC20(params.tokenIn).safeTransferFrom(msg.sender, address(this), params.amountIn);
-                    amountOut = params.amountIn;
+                    amountOut = (params.amountIn * outputBps) / 10_000;
                     require(amountOut >= params.amountOutMinimum, "minimum output");
                     MockToken(params.tokenOut).mint(params.recipient, amountOut);
-                }
-
-                function exactOutputSingle(ExactOutputSingleParams calldata params)
-                    external
-                    payable
-                    override
-                    returns (uint256 amountIn)
-                {
-                    require(!swapsDisabled, "swaps disabled");
-                    amountIn = params.amountOut;
-                    require(amountIn <= params.amountInMaximum, "maximum input");
-                    IERC20(params.tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
-                    MockToken(params.tokenOut).mint(params.recipient, params.amountOut);
                 }
             }
 
@@ -479,6 +472,47 @@ contract MockPharaohFactory is IPharaohFactory {
                             assertEq(assetToken.balanceOf(alice) - balanceBefore, 200 ether);
                             assertGt(vault.balanceOf(alice), 0);
                             assertGt(vault.tokenId(), 0);
+                        }
+
+                        function test_partialWithdrawUsesBoundedExactInputAtConfiguredSlippage() public {
+                            _deposit(alice, 1_000 ether);
+                            _deposit(bob, 1_000 ether);
+                            uint256 managedBefore = vault.totalAssets();
+                            uint256 balanceBefore = assetToken.balanceOf(alice);
+
+                            // The USDC deployment's configured one-percent
+                            // slippage budget must cover a one-percent route loss.
+                            router.setOutputBps(9_900);
+                            vm.prank(alice);
+                            uint256 sharesBurned = vault.withdraw(200 ether, alice, alice);
+
+                            assertGt(sharesBurned, 0);
+                            assertEq(assetToken.balanceOf(alice) - balanceBefore, 200 ether);
+                            assertApproxEqAbs(vault.totalAssets(), managedBefore - 200 ether, 0.01 ether);
+                            assertGt(vault.balanceOf(alice), 0);
+                            assertGt(vault.balanceOf(bob), 0);
+                            assertGt(vault.tokenId(), 0);
+                        }
+
+                        function test_partialWithdrawRevertsAtomicallyBeyondConfiguredSlippage() public {
+                            _deposit(alice, 1_000 ether);
+                            _deposit(bob, 1_000 ether);
+                            uint256 aliceSharesBefore = vault.balanceOf(alice);
+                            uint256 supplyBefore = vault.totalSupply();
+                            uint256 managedBefore = vault.totalAssets();
+                            uint256 tokenIdBefore = vault.tokenId();
+                            uint256 aliceAssetsBefore = assetToken.balanceOf(alice);
+
+                            router.setOutputBps(9_899);
+                            vm.prank(alice);
+                            vm.expectRevert(bytes("minimum output"));
+                            vault.withdraw(200 ether, alice, alice);
+
+                            assertEq(vault.balanceOf(alice), aliceSharesBefore);
+                            assertEq(vault.totalSupply(), supplyBefore);
+                            assertEq(vault.totalAssets(), managedBefore);
+                            assertEq(vault.tokenId(), tokenIdBefore);
+                            assertEq(assetToken.balanceOf(alice), aliceAssetsBefore);
                         }
 
                         function test_rebalancePreservesValueAndRequiresKeeper() public {

@@ -1,0 +1,35 @@
+{
+  "version": "1.0",
+  "chainId": "43114",
+  "createdAt": 1786521186000,
+  "meta": {
+    "name": "Pharaoh USDC 10-USDC canary",
+    "description": "Safe nonce 1: approve exactly 10 USDC, unpause the reviewed Pharaoh USDC vault, deposit to the Safe, then close public deposits with a cap of 1 raw unit.",
+    "txBuilderVersion": "2.0.1",
+    "createdFromSafeAddress": "0x80f4207e0810EA2C39B6C8387E5ffC6FF34dfB12",
+    "createdFromOwnerAddress": "",
+    "checksum": "0x3b936855825c6af687f98e5ab4674429cf0d4d30dcccb0e7019d398cfc68695a"
+  },
+  "transactions": [
+    {
+      "to": "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",
+      "value": "0",
+      "data": "0x095ea7b3000000000000000000000000855bf832f26a294d28500db59ee941de3d6541290000000000000000000000000000000000000000000000000000000000989680"
+    },
+    {
+      "to": "0x855bF832f26a294d28500db59eE941dE3d654129",
+      "value": "0",
+      "data": "0x3f4ba83a"
+    },
+    {
+      "to": "0x855bF832f26a294d28500db59eE941dE3d654129",
+      "value": "0",
+      "data": "0x6e553f65000000000000000000000000000000000000000000000000000000000098968000000000000000000000000080f4207e0810ea2c39b6c8387e5ffc6ff34dfb12"
+    },
+    {
+      "to": "0x855bF832f26a294d28500db59eE941dE3d654129",
+      "value": "0",
+      "data": "0x866512030000000000000000000000000000000000000000000000000000000000000001"
+    }
+  ]
+}

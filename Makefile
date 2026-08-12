@@ -13,7 +13,7 @@ LFJ_PRICE_ORACLE ?=
 LFJ_VALUATION_HAIRCUT_BPS ?= 200
 SIGNER_ARGS ?=
 
-.PHONY: build test test-pharaoh test-pharaoh-fork grow-pharaoh-observations check-pharaoh-observations deploy-pharaoh-dry-run deploy-pharaoh-mainnet pharaoh-status pharaoh-pnl-snapshot test-lfj-fork test-lfj-fork-pinned deploy-lfj-proxy-dry-run deploy-lfj-proxy-mainnet deploy-lfj-dry-run deploy-lfj-mainnet check-lfj apy-snapshot apy-compare
+.PHONY: build test test-pharaoh test-peridot-pharaoh-oracle test-pharaoh-fork check-pharaoh-safe-batches grow-pharaoh-observations check-pharaoh-observations deploy-pharaoh-dry-run deploy-pharaoh-mainnet deploy-pharaoh-upgrade-dry-run deploy-pharaoh-upgrade-mainnet prepare-pharaoh-upgrade deploy-pharaoh-hotfix-dry-run deploy-pharaoh-hotfix-mainnet prepare-pharaoh-hotfix pharaoh-status pharaoh-pnl-snapshot test-lfj-fork test-lfj-fork-pinned deploy-lfj-proxy-dry-run deploy-lfj-proxy-mainnet deploy-lfj-dry-run deploy-lfj-mainnet check-lfj apy-snapshot apy-compare
 
 build:
 	forge build
@@ -24,8 +24,14 @@ test:
 test-pharaoh:
 	forge test --match-path "test/Pharaoh*.t.sol" -vv
 
+test-peridot-pharaoh-oracle:
+	forge test --match-path "test/PeridotPharaohShareOracle.t.sol" -vv
+
 test-pharaoh-fork:
-	forge test --fork-url $(AVAX_RPC) --match-path "test/Pharaoh*MainnetFork.t.sol" -vvv
+	forge test --fork-url $(AVAX_RPC) --fork-block-number $(FORK_BLOCK) --match-path "test/Pharaoh*MainnetFork.t.sol" -vvv
+
+check-pharaoh-safe-batches:
+	./scripts/check-safe-batches.sh
 
 grow-pharaoh-observations:
 	$(if $(strip $(SIGNER_ARGS)),,$(error SIGNER_ARGS is required, for example SIGNER_ARGS='--account my-keystore'))
@@ -44,6 +50,28 @@ deploy-pharaoh-dry-run:
 deploy-pharaoh-mainnet:
 	$(if $(strip $(SIGNER_ARGS)),,$(error SIGNER_ARGS is required, for example SIGNER_ARGS='--account my-keystore'))
 	DEPLOYER=$(DEPLOYER) MULTISIG=$(MULTISIG) KEEPER=$(KEEPER) USDC_DEPOSIT_CAP=$(USDC_DEPOSIT_CAP) WAVAX_DEPOSIT_CAP=$(WAVAX_DEPOSIT_CAP) forge script script/DeployPharaoh.s.sol:DeployPharaoh --rpc-url $(AVAX_RPC) --broadcast --verify $(SIGNER_ARGS) -vvv
+
+deploy-pharaoh-upgrade-dry-run:
+	DEPLOYER=$(DEPLOYER) forge script script/DeployPharaohUpgrade.s.sol:DeployPharaohUpgrade --rpc-url $(AVAX_RPC) -vvv
+
+deploy-pharaoh-upgrade-mainnet:
+	$(if $(strip $(SIGNER_ARGS)),,$(error SIGNER_ARGS is required, for example SIGNER_ARGS='--account my-keystore --verifier sourcify'))
+	DEPLOYER=$(DEPLOYER) forge script script/DeployPharaohUpgrade.s.sol:DeployPharaohUpgrade --rpc-url $(AVAX_RPC) --broadcast --verify $(SIGNER_ARGS) -vvv
+
+prepare-pharaoh-upgrade:
+	$(if $(strip $(NEW_IMPLEMENTATION)),,$(error NEW_IMPLEMENTATION is required))
+	NEW_IMPLEMENTATION=$(NEW_IMPLEMENTATION) forge script script/DeployPharaohUpgrade.s.sol:PreparePharaohUpgrade --rpc-url $(AVAX_RPC) -vvv
+
+deploy-pharaoh-hotfix-dry-run:
+	DEPLOYER=$(DEPLOYER) forge script script/DeployPharaohPartialExitHotfix.s.sol:DeployPharaohPartialExitHotfix --rpc-url $(AVAX_RPC) -vvv
+
+deploy-pharaoh-hotfix-mainnet:
+	$(if $(strip $(SIGNER_ARGS)),,$(error SIGNER_ARGS is required, for example SIGNER_ARGS='--account my-keystore --verifier sourcify'))
+	DEPLOYER=$(DEPLOYER) forge script script/DeployPharaohPartialExitHotfix.s.sol:DeployPharaohPartialExitHotfix --rpc-url $(AVAX_RPC) --broadcast --verify $(SIGNER_ARGS) -vvv
+
+prepare-pharaoh-hotfix:
+	$(if $(strip $(NEW_IMPLEMENTATION)),,$(error NEW_IMPLEMENTATION is required))
+	NEW_IMPLEMENTATION=$(NEW_IMPLEMENTATION) forge script script/DeployPharaohPartialExitHotfix.s.sol:PreparePharaohPartialExitHotfix --rpc-url $(AVAX_RPC) -vvv
 
 pharaoh-status:
 	RPC=$(AVAX_RPC) ./scripts/pharaoh-pnl.sh
