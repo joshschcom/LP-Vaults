@@ -1,0 +1,35 @@
+{
+  "version": "1.0",
+  "chainId": "43114",
+  "createdAt": 1786521186001,
+  "meta": {
+    "name": "Pharaoh WAVAX 1-WAVAX canary",
+    "description": "Safe nonce 2 after the USDC batch: approve exactly 1 WAVAX, unpause the reviewed Pharaoh WAVAX vault, deposit to the Safe, then close public deposits with a cap of 1 raw unit.",
+    "txBuilderVersion": "2.0.1",
+    "createdFromSafeAddress": "0x80f4207e0810EA2C39B6C8387E5ffC6FF34dfB12",
+    "createdFromOwnerAddress": "",
+    "checksum": "0x7f44591fc39002cfb247cabbdea88c5326f3ec4b8011b6758fbb77af7823f066"
+  },
+  "transactions": [
+    {
+      "to": "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
+      "value": "0",
+      "data": "0x095ea7b3000000000000000000000000e9a53f0077f9cf767a95ce75da483e906ee190e80000000000000000000000000000000000000000000000000de0b6b3a7640000"
+    },
+    {
+      "to": "0xe9a53f0077f9cf767a95Ce75Da483E906eE190E8",
+      "value": "0",
+      "data": "0x3f4ba83a"
+    },
+    {
+      "to": "0xe9a53f0077f9cf767a95Ce75Da483E906eE190E8",
+      "value": "0",
+      "data": "0x6e553f650000000000000000000000000000000000000000000000000de0b6b3a764000000000000000000000000000080f4207e0810ea2c39b6c8387e5ffc6ff34dfb12"
+    },
+    {
+      "to": "0xe9a53f0077f9cf767a95Ce75Da483E906eE190E8",
+      "value": "0",
+      "data": "0x866512030000000000000000000000000000000000000000000000000000000000000001"
+    }
+  ]
+}
