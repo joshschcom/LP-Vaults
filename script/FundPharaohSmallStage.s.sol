@@ -14,12 +14,15 @@ import {IPharaohSwapRouter} from "../contracts/interfaces/pharaoh/IPharaohSwapRo
 
 /// @notice Converts 5 deployer USDC to WAVAX, then funds the Safe with the
 ///         exact assets required by the reviewed small-stage deposit batches.
-/// @dev Guarded against replay: both Safe asset balances must be zero.
+/// @dev Guarded against replay by pinning the pre-stage vault supplies and
+///      requiring the Safe to own every outstanding share.
 contract FundPharaohSmallStage is Script {
     using SafeERC20 for IERC20;
 
     uint256 private constant AVALANCHE_CHAIN_ID = 43_114;
     uint256 private constant MAX_FEED_STALENESS = 26 hours;
+    uint256 private constant PRE_STAGE_USDC_SUPPLY = 9_949_763;
+    uint256 private constant PRE_STAGE_WAVAX_SUPPLY = 985_198_126_710_275_400;
 
     address private constant EXPECTED_DEPLOYER = 0x94696d767e65a75581145646960FA0eC886cE5d2;
     address private constant SAFE = 0x80f4207e0810EA2C39B6C8387E5ffC6FF34dfB12;
@@ -115,6 +118,10 @@ contract FundPharaohSmallStage is Script {
                 || USDC.allowance(deployer, address(SWAP_ROUTER)) != 0 || USDC.allowance(SAFE, address(USDC_VAULT)) != 0
                 || WAVAX.allowance(SAFE, address(WAVAX_VAULT)) != 0 || USDC_VAULT.paused() || WAVAX_VAULT.paused()
                 || USDC_VAULT.depositCap() != 1 || WAVAX_VAULT.depositCap() != 1
+                || USDC_VAULT.totalSupply() != PRE_STAGE_USDC_SUPPLY
+                || WAVAX_VAULT.totalSupply() != PRE_STAGE_WAVAX_SUPPLY
+                || USDC_VAULT.balanceOf(SAFE) != PRE_STAGE_USDC_SUPPLY
+                || WAVAX_VAULT.balanceOf(SAFE) != PRE_STAGE_WAVAX_SUPPLY
                 || _implementationOf(USDC_VAULT) != LIVE_IMPLEMENTATION
                 || _implementationOf(WAVAX_VAULT) != LIVE_IMPLEMENTATION
                 || LIVE_IMPLEMENTATION.codehash != LIVE_IMPLEMENTATION_CODEHASH
