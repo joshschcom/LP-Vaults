@@ -53,13 +53,15 @@ The implementation rejects configurations whose swap tolerance does not cover th
 
 Both vaults are active and in range, all outstanding shares are owned by the Safe, asset allowances are zero, and each final deposit cap is one raw unit so public deposits remain closed. Continue the time-series canary monitoring before listing the shares in a lending market.
 
-### Partial-exit hotfix gate
+### Partial-exit hotfix (live)
 
-Do not add the proposed 100-USDC or 5-WAVAX tranche and do not list either share token in a lending market yet. Post-canary fork testing found that the current implementation's partial asset-only redemption calls Pharaoh's deployed `exactOutputSingle` route. The verified upstream router packs that route in the wrong field order, derives a non-contract pool address, and reverts. A sole holder's full redemption still works because it uses the separate `exactInputSingle` path, but the staged-tranche round trip and any multi-holder or lending-market use require partial exits.
+Post-canary fork testing found that the previous `0x87C2...10CEa` implementation's partial asset-only redemption called Pharaoh's deployed `exactOutputSingle` route. The verified upstream router packs that route in the wrong field order, derives a non-contract pool address, and reverts. A sole holder's full redemption still worked because it used the separate `exactInputSingle` path, but the staged-tranche round trip and any multi-holder or lending-market use require partial exits.
 
-The candidate hotfix removes the exact-output dependency. It uses an oracle-derived, slippage-capped exact-input amount and requires the router to deliver the complete asset shortfall; otherwise the entire redemption reverts without burning shares. At pinned post-canary block `92626200`, the fork suite upgrades both live proxies locally without changing storage, then passes the 10-USDC/1-WAVAX partial canaries and the proposed 100-USDC/5-WAVAX deposit-and-partial-redemption sequences. The candidate runtime is 24,153 bytes, 423 bytes below EIP-170.
+The live hotfix removes the exact-output dependency. It uses an oracle-derived, slippage-capped exact-input amount and requires the router to deliver the complete asset shortfall; otherwise the entire redemption reverts without burning shares. At pinned pre-upgrade block `92626200`, the fork suite upgraded both live proxies locally without changing storage, then passed the 10-USDC/1-WAVAX partial canaries and the originally proposed 100-USDC/5-WAVAX deposit-and-partial-redemption sequences. The runtime is 24,153 bytes, 423 bytes below EIP-170.
 
-The guarded deployment simulation is:
+The reviewed implementation was deployed and Sourcify-verified at `0x37E28a2C9FA3bBdab81efA69D5D480f5107a3770` in Avalanche transaction `0xc001b1d8a79a9fe47016b61e6011f07bb2d2fd4a41f101b6bd8452618defc43c`, block `92630151`. Its runtime codehash is `0x416f2a818693b20948fc44e9955ec7a370be051599b1eef6ca1fad932f3626ef`. Almanax and Ozone/Cecuro both completed with zero actionable findings. The Safe atomically upgraded both proxies in transaction `0xb07fd420d0b94a278b84fa16b3a54914dd4714360ab63c7fdb50bf6411a555c3`, block `92634831`. Both vaults remained active with their positions, shares, risk parameters, and one-raw-unit deposit caps unchanged.
+
+The guarded deployment simulation used was:
 
 ```bash
 make deploy-pharaoh-hotfix-dry-run \
@@ -67,7 +69,7 @@ make deploy-pharaoh-hotfix-dry-run \
   DEPLOYER=0x94696d767e65a75581145646960FA0eC886cE5d2
 ```
 
-Only after the final commit is merged and both external scans are clear, deploy the implementation with the encrypted keystore:
+The implementation was deployed with the encrypted keystore using:
 
 ```bash
 make deploy-pharaoh-hotfix-mainnet \
@@ -77,10 +79,10 @@ make deploy-pharaoh-hotfix-mainnet \
 
 make prepare-pharaoh-hotfix \
   AVAX_RPC=https://api.avax.network/ext/bc/C/rpc \
-  NEW_IMPLEMENTATION=0xYourVerifiedHotfixImplementation
+  NEW_IMPLEMENTATION=0x37E28a2C9FA3bBdab81efA69D5D480f5107a3770
 ```
 
-The deployment changes no proxy state. The Safe must then execute the two generated `ProxyAdmin.upgradeAndCall(proxy, implementation, 0x)` calls atomically, each with native value zero. Re-run a freshly pinned fork suite and the PnL snapshot before either staged deposit file becomes executable.
+The implementation deployment itself changed no proxy state. The Safe subsequently executed the two `ProxyAdmin.upgradeAndCall(proxy, implementation, 0x)` calls atomically with native value zero. `safe/Pharaoh-partial-exit-hotfix-43114.json` is now a retained historical artifact and must not be re-executed. The post-upgrade fork passed 8/8 at block `92634917` and the PnL check remained healthy before the staged files were marked ready.
 
 The guarded single-use commands used for the implementation deployment were:
 
@@ -229,24 +231,37 @@ Do not execute if Safe shows a different full target address, decoded function, 
 
 ### Proposed staged deposits
 
-**Blocked pending the partial-exit implementation deployment and Safe upgrade described above.** After that gate clears, the next controlled step is 100 USDC and 5 WAVAX. These are capital additions, not public cap increases. Each checksummed Transaction Builder file uses four calls in one atomic Safe transaction:
+**Post-upgrade gate passed; Safe funding remains required.** The fresh fork at block `92637472` passed 13/13 live-state, partial-exit, staged-round-trip, live-pool swap, storage, risk-migration, and lending-oracle tests. Read-only live calls also successfully simulated partial redemptions from both upgraded proxies. The smaller next controlled step is 20 USDC and 0.75 WAVAX. These are capital additions, not public cap increases. Each checksummed Transaction Builder file uses four calls in one atomic Safe transaction:
 
 1. Approve exactly the staged asset amount.
-2. Temporarily raise that vault's cap to 200 USDC or 10 WAVAX.
+2. Temporarily raise that vault's cap to 40 USDC or 2 WAVAX.
 3. Deposit the staged amount with the Safe as receiver.
 4. Restore the cap to one raw unit.
 
-The prepared-but-blocked files are `safe/Pharaoh-USDC-stage-100-43114.json` and `safe/Pharaoh-WAVAX-stage-5-43114.json`. Validate all retained Safe files with:
+The prepared post-upgrade files are `safe/Pharaoh-USDC-stage-20-43114.json` and `safe/Pharaoh-WAVAX-stage-0.75-43114.json`. Validate all retained Safe files with:
 
 ```bash
 make check-pharaoh-safe-batches
 ```
 
-Fund the Safe with exactly 100 USDC and 5 WAVAX before importing the corresponding files. Execute USDC and WAVAX as separate Safe batches, then immediately run the status and snapshot commands. After both execute, use total cost bases of 110 USDC and 6 WAVAX:
+The guarded funding script swaps exactly 5 deployer USDC to WAVAX through the active direct Pharaoh pool. It requires at least 0.75 WAVAX and at least 97% of the fresh Chainlink-derived fair output, then transfers exactly 20 USDC and 0.75 WAVAX to the Safe. It refuses to run unless both Safe asset balances and relevant allowances are zero, both vaults are live on the expected hotfix with one-raw-unit caps, and the expected pool/router/feed configuration is healthy. Dry-run it first, then broadcast with the encrypted keystore:
 
 ```bash
-USDC_COST_BASIS_RAW=110000000 \
-WAVAX_COST_BASIS_RAW=6000000000000000000 \
+make fund-pharaoh-small-stage-dry-run \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc \
+  DEPLOYER=0x94696d767e65a75581145646960FA0eC886cE5d2
+
+make fund-pharaoh-small-stage-mainnet \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc \
+  DEPLOYER=0x94696d767e65a75581145646960FA0eC886cE5d2 \
+  SIGNER_ARGS='--account robinhood-deployer'
+```
+
+Do not execute either Safe batch until the funding transactions are confirmed and the Safe shows exactly 20 USDC and 0.75 WAVAX. Execute USDC and WAVAX as separate Safe batches, then immediately run the status and snapshot commands. After both execute, use total cost bases of 30 USDC and 1.75 WAVAX:
+
+```bash
+USDC_COST_BASIS_RAW=30000000 \
+WAVAX_COST_BASIS_RAW=1750000000000000000 \
 make pharaoh-pnl-snapshot \
   AVAX_RPC=https://api.avax.network/ext/bc/C/rpc
 ```

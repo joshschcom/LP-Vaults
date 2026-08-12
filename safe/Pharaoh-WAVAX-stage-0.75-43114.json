@@ -1,0 +1,35 @@
+{
+  "version": "1.0",
+  "chainId": "43114",
+  "createdAt": 1786541000001,
+  "meta": {
+    "name": "Pharaoh WAVAX 0.75-WAVAX staged deposit",
+    "description": "POST-UPGRADE READY; fund the Safe with exactly 0.75 WAVAX before execution. Approve exactly 0.75 WAVAX, temporarily raise the cap to 2 WAVAX, deposit to the Safe, and atomically close public deposits with a cap of 1 raw unit.",
+    "txBuilderVersion": "2.0.1",
+    "createdFromSafeAddress": "0x80f4207e0810EA2C39B6C8387E5ffC6FF34dfB12",
+    "createdFromOwnerAddress": "",
+    "checksum": "0x6151becbf13cac315463044dd99e3900c275d13bef571c6d195fecc6b764107b"
+  },
+  "transactions": [
+    {
+      "to": "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
+      "value": "0",
+      "data": "0x095ea7b3000000000000000000000000e9a53f0077f9cf767a95ce75da483e906ee190e80000000000000000000000000000000000000000000000000a688906bd8b0000"
+    },
+    {
+      "to": "0xe9a53f0077f9cf767a95Ce75Da483E906eE190E8",
+      "value": "0",
+      "data": "0x866512030000000000000000000000000000000000000000000000001bc16d674ec80000"
+    },
+    {
+      "to": "0xe9a53f0077f9cf767a95Ce75Da483E906eE190E8",
+      "value": "0",
+      "data": "0x6e553f650000000000000000000000000000000000000000000000000a688906bd8b000000000000000000000000000080f4207e0810ea2c39b6c8387e5ffc6ff34dfb12"
+    },
+    {
+      "to": "0xe9a53f0077f9cf767a95Ce75Da483E906eE190E8",
+      "value": "0",
+      "data": "0x866512030000000000000000000000000000000000000000000000000000000000000001"
+    }
+  ]
+}

@@ -52,6 +52,7 @@ contract MockPharaohFactory is IPharaohFactory {
         address public immutable override token1;
         uint24 public constant override fee = 40;
         int24 public constant override tickSpacing = 1;
+        uint128 public constant override liquidity = 1;
 
         int24 public spotTick;
         int24 public meanTick;

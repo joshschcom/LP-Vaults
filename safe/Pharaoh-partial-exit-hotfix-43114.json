@@ -1,0 +1,25 @@
+{
+  "version": "1.0",
+  "chainId": "43114",
+  "createdAt": 1786532414000,
+  "meta": {
+    "name": "Pharaoh partial-exit atomic proxy upgrades",
+    "description": "Atomically upgrade both active Pharaoh proxies from 0x87C2C3bE37B2D71Ca85D2D950F0eed4532410CEa to verified implementation 0x37E28a2C9FA3bBdab81efA69D5D480f5107a3770. Both calls use ProxyAdmin.upgradeAndCall with empty migration calldata, native value zero, and CALL operation. This batch performs no deposit and no vault pause.",
+    "txBuilderVersion": "2.0.1",
+    "createdFromSafeAddress": "0x80f4207e0810EA2C39B6C8387E5ffC6FF34dfB12",
+    "createdFromOwnerAddress": "",
+    "checksum": "0x024f40b23c018d580d1a4303787f7304dbbd038a86108f14578c65dcb8bbc186"
+  },
+  "transactions": [
+    {
+      "to": "0x2DD4191B2944396B5853f4219E829f01636F65cf",
+      "value": "0",
+      "data": "0x9623609d000000000000000000000000855bf832f26a294d28500db59ee941de3d65412900000000000000000000000037e28a2c9fa3bbdab81efa69d5d480f5107a377000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "to": "0x34CbBdfcBcc72e8bf70CbF6c7245fdb2725b94dC",
+      "value": "0",
+      "data": "0x9623609d000000000000000000000000e9a53f0077f9cf767a95ce75da483e906ee190e800000000000000000000000037e28a2c9fa3bbdab81efa69d5d480f5107a377000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ]
+}
