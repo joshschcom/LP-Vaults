@@ -12,7 +12,7 @@
 #   ./scripts/pharaoh-pnl.sh --snapshot
 #   BLOCK=12345678 ./scripts/pharaoh-pnl.sh
 #
-# Cost basis defaults to the planned 10 USDC and 1 WAVAX canaries. Override it
+# Cost basis defaults to the funded 30 USDC and 1.75 WAVAX stages. Override it
 # after any additional deposit, withdrawal, or share transfer.
 
 set -euo pipefail
@@ -21,8 +21,13 @@ RPC="${RPC:-${AVAX_RPC:-${AVAX_MAINNET_RPC_URL:-https://api.avax.network/ext/bc/
 SAFE="${SAFE:-0x80f4207e0810EA2C39B6C8387E5ffC6FF34dfB12}"
 USDC_VAULT="${USDC_VAULT:-0x855bF832f26a294d28500db59eE941dE3d654129}"
 WAVAX_VAULT="${WAVAX_VAULT:-0xe9a53f0077f9cf767a95Ce75Da483E906eE190E8}"
-USDC_COST_BASIS_RAW="${USDC_COST_BASIS_RAW:-10000000}"
-WAVAX_COST_BASIS_RAW="${WAVAX_COST_BASIS_RAW:-1000000000000000000}"
+PHAR="${PHAR:-0x13A466998Ce03Db73aBc2d4DF3bBD845Ed1f28E7}"
+XPHAR="${XPHAR:-0xE8164Ea89665DAb7a553e667F81F30CfDA736B9A}"
+WAVAX="${WAVAX:-0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7}"
+USDC="${USDC:-0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E}"
+PHARAOH_QUOTER="${PHARAOH_QUOTER:-0xB7297301b7CC659BB96D51754643A0Df6eEA2138}"
+USDC_COST_BASIS_RAW="${USDC_COST_BASIS_RAW:-30000000}"
+WAVAX_COST_BASIS_RAW="${WAVAX_COST_BASIS_RAW:-1750000000000000000}"
 SNAPSHOT_DIR="${SNAPSHOT_DIR:-./data}"
 
 WRITE_SNAPSHOT=false
@@ -218,5 +223,74 @@ monitor_vault \
   "$WAVAX_COST_BASIS_RAW" \
   "pharaoh-wavax-pnl.csv"
 
+monitor_rewards() {
+  local safe_phar usdc_vault_phar wavax_vault_phar safe_xphar usdc_vault_xphar wavax_vault_xphar
+  safe_phar=$(normalize_num "$(cast call "$PHAR" 'balanceOf(address)(uint256)' "$SAFE" --rpc-url "$RPC" --block "$CURRENT_BLOCK")")
+  usdc_vault_phar=$(normalize_num "$(cast call "$PHAR" 'balanceOf(address)(uint256)' "$USDC_VAULT" --rpc-url "$RPC" --block "$CURRENT_BLOCK")")
+  wavax_vault_phar=$(normalize_num "$(cast call "$PHAR" 'balanceOf(address)(uint256)' "$WAVAX_VAULT" --rpc-url "$RPC" --block "$CURRENT_BLOCK")")
+  safe_xphar=$(normalize_num "$(cast call "$XPHAR" 'balanceOf(address)(uint256)' "$SAFE" --rpc-url "$RPC" --block "$CURRENT_BLOCK")")
+  usdc_vault_xphar=$(normalize_num "$(cast call "$XPHAR" 'balanceOf(address)(uint256)' "$USDC_VAULT" --rpc-url "$RPC" --block "$CURRENT_BLOCK")")
+  wavax_vault_xphar=$(normalize_num "$(cast call "$XPHAR" 'balanceOf(address)(uint256)' "$WAVAX_VAULT" --rpc-url "$RPC" --block "$CURRENT_BLOCK")")
+
+  local wavax_quote="0"
+  local usdc_quote="0"
+  local quote_status="available"
+  if [[ "$safe_phar" != "0" ]]; then
+    local call_output
+    if call_output=$(cast call \
+      "$PHARAOH_QUOTER" \
+      'quoteExactInputSingle((address,address,uint256,int24,uint160))(uint256,uint160,uint32,uint256)' \
+      "($PHAR,$WAVAX,$safe_phar,5,0)" \
+      --rpc-url "$RPC" \
+      --block "$CURRENT_BLOCK" 2>&1); then
+      wavax_quote=$(echo "$call_output" | sed -n '1p' | awk '{print $1}')
+    else
+      quote_status="unavailable"
+    fi
+
+    local usdc_path="0x${PHAR#0x}000005${WAVAX#0x}00000a${USDC#0x}"
+    if call_output=$(cast call \
+      "$PHARAOH_QUOTER" \
+      'quoteExactInput(bytes,uint256)(uint256,uint160[],uint32[],uint256)' \
+      "$usdc_path" \
+      "$safe_phar" \
+      --rpc-url "$RPC" \
+      --block "$CURRENT_BLOCK" 2>&1); then
+      usdc_quote=$(echo "$call_output" | sed -n '1p' | awk '{print $1}')
+    else
+      quote_status="unavailable"
+    fi
+  fi
+
+  echo "=== External Pharaoh Reward Inventory ==="
+  echo "Safe PHAR:            $(human_amount "$safe_phar" 18) PHAR ($safe_phar raw)"
+  echo "USDC vault PHAR:      $(human_amount "$usdc_vault_phar" 18) PHAR ($usdc_vault_phar raw)"
+  echo "WAVAX vault PHAR:     $(human_amount "$wavax_vault_phar" 18) PHAR ($wavax_vault_phar raw)"
+  echo "Safe xPHAR:           $(human_amount "$safe_xphar" 18) xPHAR ($safe_xphar raw)"
+  echo "USDC vault xPHAR:     $(human_amount "$usdc_vault_xphar" 18) xPHAR ($usdc_vault_xphar raw)"
+  echo "WAVAX vault xPHAR:    $(human_amount "$wavax_vault_xphar" 18) xPHAR ($wavax_vault_xphar raw)"
+  if [[ "$quote_status" == "available" ]]; then
+    echo "Safe PHAR quote:      $(human_amount "$wavax_quote" 18) WAVAX ($wavax_quote raw)"
+    echo "Safe PHAR value:      ~$(human_amount "$usdc_quote" 6) USDC ($usdc_quote raw)"
+  else
+    echo "Safe PHAR quote:      unavailable"
+  fi
+
+  if [[ "$WRITE_SNAPSHOT" == true ]]; then
+    mkdir -p "$SNAPSHOT_DIR"
+    local path="$SNAPSHOT_DIR/pharaoh-rewards.csv"
+    if [[ ! -f "$path" ]]; then
+      echo "timestamp,epoch,block,safe,safePhar,usdcVaultPhar,wavaxVaultPhar,safeXPhar,usdcVaultXPhar,wavaxVaultXPhar,quotedWavax,quotedUsdc" > "$path"
+    fi
+    echo "$TIMESTAMP,$NOW_EPOCH,$CURRENT_BLOCK,$SAFE,$safe_phar,$usdc_vault_phar,$wavax_vault_phar,$safe_xphar,$usdc_vault_xphar,$wavax_vault_xphar,$wavax_quote,$usdc_quote" >> "$path"
+    echo "Snapshot:             $path"
+  fi
+  echo ""
+}
+
+monitor_rewards
+
 echo "The simulated redemption is an eth_call: it does not burn shares or move funds."
-echo "PnL excludes gas and unpriced PHAR/xPHAR rewards. Update cost basis after any capital flow."
+echo "Vault PnL excludes gas and PHAR/xPHAR until rewards are converted and donated as underlying."
+echo "The PHAR quote is an executable Pharaoh spot estimate, not an accounting oracle or collateral price."
+echo "Update cost basis after any capital flow."

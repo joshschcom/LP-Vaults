@@ -37,9 +37,9 @@ contract PharaohDeploymentMainnetForkTest is Test {
     address private constant SAFE = 0x80f4207e0810EA2C39B6C8387E5ffC6FF34dfB12;
     address private constant KEEPER = 0x94696d767e65a75581145646960FA0eC886cE5d2;
     IPharaohSwapRouter private constant SWAP_ROUTER = IPharaohSwapRouter(0xc8B8fCbDb5C019D7802fFb0b39603395D7d3915c);
-    address private constant IMPLEMENTATION = 0x37E28a2C9FA3bBdab81efA69D5D480f5107a3770;
+    address private constant IMPLEMENTATION = 0x165E1f072e7bEeDf94f14F732838354cA20bA45d;
     bytes32 private constant IMPLEMENTATION_CODEHASH =
-        0x416f2a818693b20948fc44e9955ec7a370be051599b1eef6ca1fad932f3626ef;
+        0x4fa61d2d9ce0a7e8f1aebf96fd007fad0aa17f969be476eddd6d6f344fb22e4b;
     address private constant PHAR = 0x13A466998Ce03Db73aBc2d4DF3bBD845Ed1f28E7;
     address private constant XPHAR = 0xE8164Ea89665DAb7a553e667F81F30CfDA736B9A;
 
@@ -163,7 +163,7 @@ contract PharaohDeploymentMainnetForkTest is Test {
         assertGt(_canaryRoundTrip(WAVAX_VAULT, WAVAX, 1 ether), 0.98 ether);
     }
 
-    function test_partialExitHotfixCodehashIsLive() public {
+    function test_rewardExtensionCodehashIsLive() public {
         _requireFork();
         assertEq(IMPLEMENTATION.codehash, IMPLEMENTATION_CODEHASH);
         assertEq(_implementationOf(USDC_VAULT), IMPLEMENTATION);

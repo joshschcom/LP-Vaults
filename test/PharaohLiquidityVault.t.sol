@@ -146,6 +146,15 @@ contract MockPharaohFactory is IPharaohFactory {
                     outputBps = newOutputBps;
                 }
 
+                function exactInput(ExactInputParams calldata)
+                    external
+                    payable
+                    override
+                    returns (uint256)
+                {
+                    revert("multihop unsupported");
+                }
+
                 function exactInputSingle(ExactInputSingleParams calldata params)
                     external
                     payable
