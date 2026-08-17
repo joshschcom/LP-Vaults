@@ -148,12 +148,12 @@ contract PharaohRewardCompounder is ReentrancyGuard {
         }
 
         uint256 existingPhar = phar.balanceOf(address(this));
+        uint256 available = phar.balanceOf(safe);
         if (existingPhar != 0) {
             phar.safeTransfer(safe, existingPhar);
             emit TokenRecovered(address(phar), existingPhar);
         }
 
-        uint256 available = phar.balanceOf(safe);
         pharIn = Math.min(available, maximumPharIn);
         if (pharIn < minimumPharIn) revert Compounder__InsufficientPhar(available, minimumPharIn);
 
