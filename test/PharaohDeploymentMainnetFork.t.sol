@@ -9,6 +9,7 @@ import {ITransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transp
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
 import {PharaohLiquidityVault} from "../contracts/PharaohLiquidityVault.sol";
+import {PharaohRewardExtension} from "../contracts/PharaohRewardExtension.sol";
 import {IPharaohSwapRouter} from "../contracts/interfaces/pharaoh/IPharaohSwapRouter.sol";
 import {IPeridotPriceOracle, PeridotPharaohShareOracle} from "../contracts/oracles/PeridotPharaohShareOracle.sol";
 
@@ -39,6 +40,8 @@ contract PharaohDeploymentMainnetForkTest is Test {
     address private constant IMPLEMENTATION = 0x37E28a2C9FA3bBdab81efA69D5D480f5107a3770;
     bytes32 private constant IMPLEMENTATION_CODEHASH =
         0x416f2a818693b20948fc44e9955ec7a370be051599b1eef6ca1fad932f3626ef;
+    address private constant PHAR = 0x13A466998Ce03Db73aBc2d4DF3bBD845Ed1f28E7;
+    address private constant XPHAR = 0xE8164Ea89665DAb7a553e667F81F30CfDA736B9A;
 
     address private constant USDC = 0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E;
     AggregatorV3Interface private constant USDC_USD_FEED =
@@ -109,36 +112,17 @@ contract PharaohDeploymentMainnetForkTest is Test {
         assertGt(redeemed, 0.71 ether);
     }
 
-    function test_proposedFiveUSDCSwapFundsSmallWAVAXStage() public {
+    function test_completedSmallStagesAreLive() public {
         _requireFork();
-        assertGe(IERC20(USDC).balanceOf(KEEPER), 25e6);
+        assertEq(IERC20(USDC).balanceOf(SAFE), 0);
         assertEq(IERC20(WAVAX).balanceOf(SAFE), 0);
-
-        uint256 wavaxBefore = IERC20(WAVAX).balanceOf(KEEPER);
-        vm.startPrank(KEEPER);
-        IERC20(USDC).approve(address(SWAP_ROUTER), 5e6);
-        uint256 amountOut = SWAP_ROUTER.exactInputSingle(
-            IPharaohSwapRouter.ExactInputSingleParams({
-                tokenIn: USDC,
-                tokenOut: WAVAX,
-                tickSpacing: 10,
-                recipient: KEEPER,
-                deadline: block.timestamp,
-                amountIn: 5e6,
-                amountOutMinimum: 0.75 ether,
-                sqrtPriceLimitX96: 0
-            })
-        );
-        assertTrue(IERC20(USDC).transfer(SAFE, 20e6));
-        assertTrue(IERC20(WAVAX).transfer(SAFE, 0.75 ether));
-        vm.stopPrank();
-
-        console2.log("5-USDC live-pool WAVAX output", amountOut);
-        assertGe(amountOut, 0.75 ether);
-        assertEq(IERC20(USDC).balanceOf(SAFE), 20e6);
-        assertEq(IERC20(WAVAX).balanceOf(SAFE), 0.75 ether);
+        assertEq(USDC_VAULT.totalSupply(), 29_850_429);
+        assertEq(WAVAX_VAULT.totalSupply(), 1_723_597_814_184_121_992);
+        assertEq(USDC_VAULT.balanceOf(SAFE), USDC_VAULT.totalSupply());
+        assertEq(WAVAX_VAULT.balanceOf(SAFE), WAVAX_VAULT.totalSupply());
         assertEq(IERC20(USDC).allowance(KEEPER, address(SWAP_ROUTER)), 0);
-        assertEq(IERC20(WAVAX).balanceOf(KEEPER), wavaxBefore + amountOut - 0.75 ether);
+        assertEq(IERC20(USDC).allowance(SAFE, address(USDC_VAULT)), 0);
+        assertEq(IERC20(WAVAX).allowance(SAFE, address(WAVAX_VAULT)), 0);
     }
 
     function test_peridotShareOracleUsesLiveVaultAccountingAndFeeds() public {
@@ -184,6 +168,53 @@ contract PharaohDeploymentMainnetForkTest is Test {
         assertEq(IMPLEMENTATION.codehash, IMPLEMENTATION_CODEHASH);
         assertEq(_implementationOf(USDC_VAULT), IMPLEMENTATION);
         assertEq(_implementationOf(WAVAX_VAULT), IMPLEMENTATION);
+    }
+
+    function test_rewardExtensionPreservesLiveStateAndClaimsProtocolRewards() public {
+        _requireFork();
+        PharaohRewardExtension extension = new PharaohRewardExtension();
+
+        _upgradeAndHarvest(USDC_VAULT, USDC_PROXY_ADMIN, extension);
+        _upgradeAndHarvest(WAVAX_VAULT, WAVAX_PROXY_ADMIN, extension);
+    }
+
+    function _upgradeAndHarvest(PharaohLiquidityVault vault, address proxyAdmin, PharaohRewardExtension extension)
+        private
+    {
+        uint256 positionId = vault.tokenId();
+        uint256 supply = vault.totalSupply();
+        uint256 safeShares = vault.balanceOf(SAFE);
+        uint256 managedAssets = vault.totalAssets();
+        uint256 cap = vault.depositCap();
+        bool wasPaused = vault.paused();
+        uint256 vaultXPharBefore = IERC20(XPHAR).balanceOf(address(vault));
+        uint256 safePharBefore = IERC20(PHAR).balanceOf(SAFE);
+
+        vm.prank(SAFE);
+        ProxyAdmin(proxyAdmin)
+            .upgradeAndCall(ITransparentUpgradeableProxy(payable(address(vault))), address(extension), bytes(""));
+
+        assertEq(_implementationOf(vault), address(extension));
+        assertEq(vault.tokenId(), positionId);
+        assertEq(vault.totalSupply(), supply);
+        assertEq(vault.balanceOf(SAFE), safeShares);
+        assertEq(vault.totalAssets(), managedAssets);
+        assertEq(vault.depositCap(), cap);
+        assertEq(vault.paused(), wasPaused);
+        assertEq(vault.owner(), SAFE);
+        assertEq(vault.rebalancer(), KEEPER);
+
+        vm.prank(SAFE);
+        (uint256 forwarded, uint256 exited) = PharaohRewardExtension(payable(address(vault))).harvestRewards(true, 0);
+
+        assertEq(exited, 0);
+        assertEq(IERC20(PHAR).balanceOf(address(vault)), 0);
+        assertEq(IERC20(PHAR).balanceOf(SAFE), safePharBefore + forwarded);
+        assertGe(IERC20(XPHAR).balanceOf(address(vault)), vaultXPharBefore);
+        assertEq(vault.tokenId(), positionId);
+        assertEq(vault.totalSupply(), supply);
+        assertEq(vault.balanceOf(SAFE), safeShares);
+        assertEq(vault.totalAssets(), managedAssets);
     }
 
     function _assertProxy(PharaohLiquidityVault vault, address expectedAdmin) private view {

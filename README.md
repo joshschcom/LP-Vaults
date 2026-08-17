@@ -84,6 +84,33 @@ make prepare-pharaoh-hotfix \
 
 The implementation deployment itself changed no proxy state. The Safe subsequently executed the two `ProxyAdmin.upgradeAndCall(proxy, implementation, 0x)` calls atomically with native value zero. `safe/Pharaoh-partial-exit-hotfix-43114.json` is now a retained historical artifact and must not be re-executed. The post-upgrade fork passed 8/8 at block `92634917` and the PnL check remained healthy before the staged files were marked ready.
 
+### Reward extension (candidate, not live)
+
+The live partial-exit implementation is 24,153 bytes, leaving only 423 bytes below EIP-170. Reward handling therefore remains outside that core bytecode. `PharaohRewardExtension` is a small implementation layer that handles only `harvestRewards(bool,uint256)` and delegatecalls every other selector to the exact live implementation at `0x37E2...3770`. Its constructor pins that implementation's runtime codehash, while the fallback preserves the proxy's storage context, caller, value, return data, and revert data. The extension inherits the same namespaced OpenZeppelin ownership and reentrancy storage used by the base vault.
+
+The harvest function is callable only by the current vault owner. Its reward list is fixed to PHAR and xPHAR, and liquid PHAR can only be forwarded to that owner—the Safe—not to a caller-selected recipient. Passing zero as `minimumPharFromXPhar` retains xPHAR. Passing a nonzero minimum opts into exiting the vault's complete xPHAR balance and checks the actual PHAR balance increase before forwarding. Pharaoh's deployed xPHAR currently applies a 50% instant-exit penalty and can return less when its PHAR reserve is short, so xPHAR exit must never be triggered without a reviewed minimum.
+
+For shareholder-safe operation, the Safe must harvest, swap PHAR through a separately reviewed route, and transfer the resulting USDC or WAVAX back to the originating vault in one atomic Safe batch. The direct asset transfer is then reflected in `totalAssets()` for all existing shares. Do not harvest to the Safe in a public vault without completing that same-batch donation, and do not count unharvested incentives in collateral or PnL.
+
+The guarded candidate workflow is:
+
+```bash
+make deploy-pharaoh-reward-upgrade-dry-run \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc \
+  DEPLOYER=0x94696d767e65a75581145646960FA0eC886cE5d2
+
+make deploy-pharaoh-reward-upgrade-mainnet \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc \
+  DEPLOYER=0x94696d767e65a75581145646960FA0eC886cE5d2 \
+  SIGNER_ARGS='--account robinhood-deployer --verifier sourcify'
+
+make prepare-pharaoh-reward-upgrade \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc \
+  NEW_IMPLEMENTATION=<verified-extension-address>
+```
+
+Deployment changes no proxy state. After all tests and external scans pass, both generated `ProxyAdmin.upgradeAndCall(proxy, extension, 0x)` calls must be executed atomically by the Safe with native value zero. No live deployment or Safe payload has been approved yet.
+
 The guarded single-use commands used for the implementation deployment were:
 
 ```bash
@@ -120,7 +147,7 @@ Uncollected fees and non-pair incentive tokens are excluded. Entry and exit oper
 
 Asset-denominated `deposit()` is the supported entry point. Exact-share `mint()` is intentionally disabled (`maxMint() == 0`) because the net contribution is only known after swap and LP execution.
 
-Pharaoh's position manager can transfer PHAR and xPHAR to the vault automatically when liquidity changes. These and any other unpriced tokens held by the vault are excluded from `totalAssets()`. The v2 implementation deliberately omits reward forwarding and xPHAR conversion to preserve a small, reviewable core below EIP-170; harvest those balances before upgrading if the original implementation has accrued them. A dedicated, reviewed reward-conversion module is required before incentives are included in PnL or public-launch assumptions.
+Pharaoh's position manager can transfer PHAR and xPHAR to the vault automatically when liquidity changes. These and any other unpriced tokens held by the vault are excluded from `totalAssets()`. The live core deliberately omits reward forwarding and xPHAR conversion to remain below EIP-170. The candidate reward extension can forward PHAR to the owner with a protected, opt-in xPHAR exit, but incentives remain excluded from NAV until the Safe atomically converts and donates the proceeds back to the vault.
 
 For collateral valuation, lending markets should use the vault proxy's standard ERC-4626 `convertToAssets()` path and preserve their own collateral-factor and liquidation haircuts. `totalAssets()` enforces the spot/TWAP/independent-oracle bounds. Oracle staleness, unsafe price divergence, or insufficient Pharaoh observation history intentionally makes valuation revert rather than silently use spot. The lending integration must treat that revert as an oracle outage and have a tested market-pause/guardian procedure; fail-closed valuation trades availability for manipulation resistance.
 
