@@ -249,7 +249,7 @@ The prepared post-upgrade files are `safe/Pharaoh-USDC-stage-20-43114.json` and 
 make check-pharaoh-safe-batches
 ```
 
-The guarded funding script swaps exactly 5 deployer USDC to WAVAX through the active direct Pharaoh pool. It requires at least 0.75 WAVAX and at least 97% of the fresh Chainlink-derived fair output, then transfers exactly 20 USDC and 0.75 WAVAX to the Safe. It refuses to run unless both Safe asset balances and relevant allowances are zero, the vault supplies still equal the exact pre-stage canary supplies with every share owned by the Safe, both vaults are live on the expected hotfix with one-raw-unit caps, and the expected pool/router/feed configuration is healthy. The supply pins make the script permanently non-replayable after either staged deposit. Dry-run it first, then broadcast with the encrypted keystore:
+The guarded funding script swaps exactly 5 deployer USDC to WAVAX through the active direct Pharaoh pool. It requires at least 0.75 WAVAX and at least 97% of the fresh Chainlink-derived fair output, then transfers exactly 20 USDC and 0.75 WAVAX to the Safe. It refuses to run unless both Safe asset balances and relevant allowances are zero, the vault supplies still equal the exact pre-stage canary supplies with every share owned by the Safe, both vaults retain the expected Safe owner, deployer keeper, assets, paired tokens, strategy pools, oracles, hotfix implementation, and one-raw-unit caps, and the direct swap pool/router/feed configuration is healthy. The supply pins make the script permanently non-replayable after either staged deposit. Dry-run it first, then broadcast with the encrypted keystore:
 
 ```bash
 make fund-pharaoh-small-stage-dry-run \

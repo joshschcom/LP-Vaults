@@ -38,6 +38,12 @@ contract FundPharaohSmallStage is Script {
         PharaohLiquidityVault(0x855bF832f26a294d28500db59eE941dE3d654129);
     PharaohLiquidityVault private constant WAVAX_VAULT =
         PharaohLiquidityVault(0xe9a53f0077f9cf767a95Ce75Da483E906eE190E8);
+    address private constant USDT = 0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7;
+    address private constant SAVAX = 0x2b2C81e08f1Af8835a78Bb2A90AE924ACE0eA4bE;
+    address private constant USDC_VAULT_POOL = 0x9bFE3108Cc16D17a9Ec65545a0f50B2CA1C970c0;
+    address private constant WAVAX_VAULT_POOL = 0x65B9016c376604Fe0aF38c1E336Ffcec0F8ecBbD;
+    address private constant USDC_VAULT_ORACLE = 0xe6060635dfdDd495ca22b828e144AB8411c8a431;
+    address private constant WAVAX_VAULT_ORACLE = 0x2002aFd6C713a6075d66DaE758Dc466787faCeEF;
 
     IPharaohFactory private constant FACTORY = IPharaohFactory(0xAE6E5c62328ade73ceefD42228528b70c8157D0d);
     IPharaohSwapRouter private constant SWAP_ROUTER = IPharaohSwapRouter(0xc8B8fCbDb5C019D7802fFb0b39603395D7d3915c);
@@ -121,7 +127,14 @@ contract FundPharaohSmallStage is Script {
                 || USDC_VAULT.totalSupply() != PRE_STAGE_USDC_SUPPLY
                 || WAVAX_VAULT.totalSupply() != PRE_STAGE_WAVAX_SUPPLY
                 || USDC_VAULT.balanceOf(SAFE) != PRE_STAGE_USDC_SUPPLY
-                || WAVAX_VAULT.balanceOf(SAFE) != PRE_STAGE_WAVAX_SUPPLY
+                || WAVAX_VAULT.balanceOf(SAFE) != PRE_STAGE_WAVAX_SUPPLY || USDC_VAULT.owner() != SAFE
+                || WAVAX_VAULT.owner() != SAFE || USDC_VAULT.rebalancer() != deployer
+                || WAVAX_VAULT.rebalancer() != deployer || USDC_VAULT.asset() != address(USDC)
+                || WAVAX_VAULT.asset() != address(WAVAX) || address(USDC_VAULT.pairedToken()) != USDT
+                || address(WAVAX_VAULT.pairedToken()) != SAVAX || address(USDC_VAULT.pool()) != USDC_VAULT_POOL
+                || address(WAVAX_VAULT.pool()) != WAVAX_VAULT_POOL
+                || address(USDC_VAULT.priceOracle()) != USDC_VAULT_ORACLE
+                || address(WAVAX_VAULT.priceOracle()) != WAVAX_VAULT_ORACLE
                 || _implementationOf(USDC_VAULT) != LIVE_IMPLEMENTATION
                 || _implementationOf(WAVAX_VAULT) != LIVE_IMPLEMENTATION
                 || LIVE_IMPLEMENTATION.codehash != LIVE_IMPLEMENTATION_CODEHASH
