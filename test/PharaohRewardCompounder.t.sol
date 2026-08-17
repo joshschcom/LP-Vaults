@@ -207,7 +207,7 @@ contract CompounderTestRouter is IPharaohSwapRouter {
             phar.mint(address(compounder), 5 ether);
 
             vm.startPrank(address(safe));
-            phar.transfer(makeAddr("unused-holder"), 97 ether);
+            assertTrue(phar.transfer(makeAddr("unused-holder"), 97 ether));
             phar.approve(address(compounder), 3 ether);
             (uint256 actualIn,) = compounder.compound(address(wavaxVault), 3 ether, type(uint256).max, 1, DEADLINE);
             vm.stopPrank();

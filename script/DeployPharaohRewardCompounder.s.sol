@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ProxyAdmin} from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
 import {Script, console2} from "forge-std/Script.sol";
 
 import {PharaohLiquidityVault} from "../contracts/PharaohLiquidityVault.sol";
@@ -26,6 +27,7 @@ contract DeployPharaohRewardCompounder is Script {
         0x4fa61d2d9ce0a7e8f1aebf96fd007fad0aa17f969be476eddd6d6f344fb22e4b;
     bytes32 private constant ERC1967_IMPLEMENTATION_SLOT =
         0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+    bytes32 private constant ERC1967_ADMIN_SLOT = 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
 
     IERC20 private constant PHAR = IERC20(0x13A466998Ce03Db73aBc2d4DF3bBD845Ed1f28E7);
     IERC20 private constant WAVAX = IERC20(0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7);
@@ -44,6 +46,8 @@ contract DeployPharaohRewardCompounder is Script {
         PharaohLiquidityVault(0x855bF832f26a294d28500db59eE941dE3d654129);
     PharaohLiquidityVault private constant WAVAX_VAULT =
         PharaohLiquidityVault(0xe9a53f0077f9cf767a95Ce75Da483E906eE190E8);
+    ProxyAdmin private constant USDC_PROXY_ADMIN = ProxyAdmin(0x2DD4191B2944396B5853f4219E829f01636F65cf);
+    ProxyAdmin private constant WAVAX_PROXY_ADMIN = ProxyAdmin(0x34CbBdfcBcc72e8bf70CbF6c7245fdb2725b94dC);
 
     bytes32 private constant SWAP_ROUTER_CODEHASH = 0xc73f3d2a21cdace7e104858002a8be4442e2dc9d234f39c3f01320a962219032;
     bytes32 private constant QUOTER_CODEHASH = 0xf520476b52f99d9a1ff89c6187193eb240c6cb1d11d2e6466ebcbbdf7a753bd2;
@@ -57,6 +61,8 @@ contract DeployPharaohRewardCompounder is Script {
     error CompounderDeploy__MissingCode(address target);
     error CompounderDeploy__WrongCodehash(address target, bytes32 expected, bytes32 actual);
     error CompounderDeploy__UnexpectedImplementation(address vault, address actual);
+    error CompounderDeploy__UnexpectedProxyAdmin(address vault, address actual);
+    error CompounderDeploy__UnexpectedProxyAdminOwner(address proxyAdmin, address actual);
     error CompounderDeploy__UnexpectedVaultState(address vault);
     error CompounderDeploy__UnexpectedRoute(address pool);
     error CompounderDeploy__NoActiveLiquidity(address pool);
@@ -111,8 +117,8 @@ contract DeployPharaohRewardCompounder is Script {
         _assertPool(PHAR_WAVAX_POOL, address(PHAR), address(WAVAX), PHAR_WAVAX_SPACING);
         _assertPool(WAVAX_USDC_POOL, address(WAVAX), address(USDC), WAVAX_USDC_SPACING);
 
-        _assertVault(USDC_VAULT, address(USDC));
-        _assertVault(WAVAX_VAULT, address(WAVAX));
+        _assertVault(USDC_VAULT, address(USDC), USDC_PROXY_ADMIN);
+        _assertVault(WAVAX_VAULT, address(WAVAX), WAVAX_PROXY_ADMIN);
 
         (uint256 wavaxOut, uint256 usdcOut) = _quotes(QUOTE_AMOUNT);
         if (wavaxOut == 0 || usdcOut == 0) revert CompounderDeploy__NoExecutableQuote();
@@ -130,10 +136,19 @@ contract DeployPharaohRewardCompounder is Script {
         if (pool.liquidity() == 0) revert CompounderDeploy__NoActiveLiquidity(address(pool));
     }
 
-    function _assertVault(PharaohLiquidityVault vault, address expectedAsset) private view {
+    function _assertVault(PharaohLiquidityVault vault, address expectedAsset, ProxyAdmin expectedAdmin) private view {
         address implementation = address(uint160(uint256(vm.load(address(vault), ERC1967_IMPLEMENTATION_SLOT))));
         if (implementation != CURRENT_IMPLEMENTATION) {
             revert CompounderDeploy__UnexpectedImplementation(address(vault), implementation);
+        }
+        address admin = address(uint160(uint256(vm.load(address(vault), ERC1967_ADMIN_SLOT))));
+        if (admin != address(expectedAdmin)) {
+            revert CompounderDeploy__UnexpectedProxyAdmin(address(vault), admin);
+        }
+        _requireCode(admin);
+        address adminOwner = expectedAdmin.owner();
+        if (adminOwner != SAFE) {
+            revert CompounderDeploy__UnexpectedProxyAdminOwner(admin, adminOwner);
         }
         uint256 supply = vault.totalSupply();
         if (
