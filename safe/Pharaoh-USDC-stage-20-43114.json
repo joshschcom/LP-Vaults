@@ -1,0 +1,35 @@
+{
+  "version": "1.0",
+  "chainId": "43114",
+  "createdAt": 1786541000000,
+  "meta": {
+    "name": "Pharaoh USDC 20-USDC staged deposit",
+    "description": "POST-UPGRADE READY; fund the Safe with exactly 20 USDC before execution. Approve exactly 20 USDC, temporarily disable the cap only inside this atomic batch, deposit to the Safe, and restore closed public deposits with a cap of 1 raw unit.",
+    "txBuilderVersion": "2.0.1",
+    "createdFromSafeAddress": "0x80f4207e0810EA2C39B6C8387E5ffC6FF34dfB12",
+    "createdFromOwnerAddress": "",
+    "checksum": "0xf78d265f54c8bd800007744792de15902c153f986c86d444cbc1e16256fb868c"
+  },
+  "transactions": [
+    {
+      "to": "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",
+      "value": "0",
+      "data": "0x095ea7b3000000000000000000000000855bf832f26a294d28500db59ee941de3d6541290000000000000000000000000000000000000000000000000000000001312d00"
+    },
+    {
+      "to": "0x855bF832f26a294d28500db59eE941dE3d654129",
+      "value": "0",
+      "data": "0x866512030000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "to": "0x855bF832f26a294d28500db59eE941dE3d654129",
+      "value": "0",
+      "data": "0x6e553f650000000000000000000000000000000000000000000000000000000001312d0000000000000000000000000080f4207e0810ea2c39b6c8387e5ffc6ff34dfb12"
+    },
+    {
+      "to": "0x855bF832f26a294d28500db59eE941dE3d654129",
+      "value": "0",
+      "data": "0x866512030000000000000000000000000000000000000000000000000000000000000001"
+    }
+  ]
+}

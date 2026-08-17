@@ -9,6 +9,8 @@ import {ITransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transp
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
 import {PharaohLiquidityVault} from "../contracts/PharaohLiquidityVault.sol";
+import {PharaohRewardExtension} from "../contracts/PharaohRewardExtension.sol";
+import {IPharaohSwapRouter} from "../contracts/interfaces/pharaoh/IPharaohSwapRouter.sol";
 import {IPeridotPriceOracle, PeridotPharaohShareOracle} from "../contracts/oracles/PeridotPharaohShareOracle.sol";
 
 contract LiveForkPeridotBaseOracle is IPeridotPriceOracle {
@@ -34,7 +36,12 @@ contract PharaohDeploymentMainnetForkTest is Test {
 
     address private constant SAFE = 0x80f4207e0810EA2C39B6C8387E5ffC6FF34dfB12;
     address private constant KEEPER = 0x94696d767e65a75581145646960FA0eC886cE5d2;
-    address private constant IMPLEMENTATION = 0x87C2C3bE37B2D71Ca85D2D950F0eed4532410CEa;
+    IPharaohSwapRouter private constant SWAP_ROUTER = IPharaohSwapRouter(0xc8B8fCbDb5C019D7802fFb0b39603395D7d3915c);
+    address private constant IMPLEMENTATION = 0x37E28a2C9FA3bBdab81efA69D5D480f5107a3770;
+    bytes32 private constant IMPLEMENTATION_CODEHASH =
+        0x416f2a818693b20948fc44e9955ec7a370be051599b1eef6ca1fad932f3626ef;
+    address private constant PHAR = 0x13A466998Ce03Db73aBc2d4DF3bBD845Ed1f28E7;
+    address private constant XPHAR = 0xE8164Ea89665DAb7a553e667F81F30CfDA736B9A;
 
     address private constant USDC = 0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E;
     AggregatorV3Interface private constant USDC_USD_FEED =
@@ -77,40 +84,45 @@ contract PharaohDeploymentMainnetForkTest is Test {
         _assertVault(WAVAX_VAULT, WAVAX, SAVAX, WAVAX_POOL, WAVAX_ORACLE, 1, 600, 100, 100, 300, 300);
     }
 
-    function test_candidateHotfixUSDCPartialCanaryRoundTrip() public {
+    function test_liveHotfixUSDCPartialCanaryRoundTrip() public {
         _requireFork();
-        address hotfix = address(new PharaohLiquidityVault());
-        _installPartialExitHotfix(USDC_VAULT, USDC_PROXY_ADMIN, hotfix);
         uint256 redeemed = _canaryRoundTrip(USDC_VAULT, USDC, 10e6);
-        console2.log("hotfixed USDC canary round trip", redeemed);
+        console2.log("live-hotfix USDC canary round trip", redeemed);
         assertGt(redeemed, 9_800_000);
     }
 
-    function test_candidateHotfixWAVAXPartialCanaryRoundTrip() public {
+    function test_liveHotfixWAVAXPartialCanaryRoundTrip() public {
         _requireFork();
-        address hotfix = address(new PharaohLiquidityVault());
-        _installPartialExitHotfix(WAVAX_VAULT, WAVAX_PROXY_ADMIN, hotfix);
         uint256 redeemed = _canaryRoundTrip(WAVAX_VAULT, WAVAX, 1 ether);
-        console2.log("hotfixed WAVAX canary round trip", redeemed);
+        console2.log("live-hotfix WAVAX canary round trip", redeemed);
         assertGt(redeemed, 0.98 ether);
     }
 
     function test_proposedUSDCStagedBatchRoundTrip() public {
         _requireFork();
-        address hotfix = address(new PharaohLiquidityVault());
-        _installPartialExitHotfix(USDC_VAULT, USDC_PROXY_ADMIN, hotfix);
-        uint256 redeemed = _stagedRoundTrip(USDC_VAULT, USDC, 100e6, 200e6);
-        console2.log("proposed 100-USDC stage round trip", redeemed);
-        assertGt(redeemed, 98e6);
+        uint256 redeemed = _stagedRoundTrip(USDC_VAULT, USDC, 20e6);
+        console2.log("proposed 20-USDC stage round trip", redeemed);
+        assertGt(redeemed, 19.6e6);
     }
 
     function test_proposedWAVAXStagedBatchRoundTrip() public {
         _requireFork();
-        address hotfix = address(new PharaohLiquidityVault());
-        _installPartialExitHotfix(WAVAX_VAULT, WAVAX_PROXY_ADMIN, hotfix);
-        uint256 redeemed = _stagedRoundTrip(WAVAX_VAULT, WAVAX, 5 ether, 10 ether);
-        console2.log("proposed 5-WAVAX stage round trip", redeemed);
-        assertGt(redeemed, 4.75 ether);
+        uint256 redeemed = _stagedRoundTrip(WAVAX_VAULT, WAVAX, 0.75 ether);
+        console2.log("proposed 0.75-WAVAX stage round trip", redeemed);
+        assertGt(redeemed, 0.71 ether);
+    }
+
+    function test_completedSmallStagesAreLive() public {
+        _requireFork();
+        assertEq(IERC20(USDC).balanceOf(SAFE), 0);
+        assertEq(IERC20(WAVAX).balanceOf(SAFE), 0);
+        assertEq(USDC_VAULT.totalSupply(), 29_850_429);
+        assertEq(WAVAX_VAULT.totalSupply(), 1_723_597_814_184_121_992);
+        assertEq(USDC_VAULT.balanceOf(SAFE), USDC_VAULT.totalSupply());
+        assertEq(WAVAX_VAULT.balanceOf(SAFE), WAVAX_VAULT.totalSupply());
+        assertEq(IERC20(USDC).allowance(KEEPER, address(SWAP_ROUTER)), 0);
+        assertEq(IERC20(USDC).allowance(SAFE, address(USDC_VAULT)), 0);
+        assertEq(IERC20(WAVAX).allowance(SAFE, address(WAVAX_VAULT)), 0);
     }
 
     function test_peridotShareOracleUsesLiveVaultAccountingAndFeeds() public {
@@ -147,19 +159,62 @@ contract PharaohDeploymentMainnetForkTest is Test {
         _assertRiskMigrationLocked(USDC_VAULT, USDC_PROXY_ADMIN, 30, 100, 100);
         _assertRiskMigrationLocked(WAVAX_VAULT, WAVAX_PROXY_ADMIN, 100, 300, 300);
 
-        address hotfix = address(new PharaohLiquidityVault());
-        _installPartialExitHotfix(USDC_VAULT, USDC_PROXY_ADMIN, hotfix);
-        _installPartialExitHotfix(WAVAX_VAULT, WAVAX_PROXY_ADMIN, hotfix);
         assertGt(_canaryRoundTrip(USDC_VAULT, USDC, 10e6), 9_800_000);
         assertGt(_canaryRoundTrip(WAVAX_VAULT, WAVAX, 1 ether), 0.98 ether);
     }
 
-    function test_partialExitHotfixPreservesLiveState() public {
+    function test_partialExitHotfixCodehashIsLive() public {
         _requireFork();
+        assertEq(IMPLEMENTATION.codehash, IMPLEMENTATION_CODEHASH);
+        assertEq(_implementationOf(USDC_VAULT), IMPLEMENTATION);
+        assertEq(_implementationOf(WAVAX_VAULT), IMPLEMENTATION);
+    }
 
-        address hotfix = address(new PharaohLiquidityVault());
-        _installPartialExitHotfix(USDC_VAULT, USDC_PROXY_ADMIN, hotfix);
-        _installPartialExitHotfix(WAVAX_VAULT, WAVAX_PROXY_ADMIN, hotfix);
+    function test_rewardExtensionPreservesLiveStateAndClaimsProtocolRewards() public {
+        _requireFork();
+        PharaohRewardExtension extension = new PharaohRewardExtension();
+
+        _upgradeAndHarvest(USDC_VAULT, USDC_PROXY_ADMIN, extension);
+        _upgradeAndHarvest(WAVAX_VAULT, WAVAX_PROXY_ADMIN, extension);
+    }
+
+    function _upgradeAndHarvest(PharaohLiquidityVault vault, address proxyAdmin, PharaohRewardExtension extension)
+        private
+    {
+        uint256 positionId = vault.tokenId();
+        uint256 supply = vault.totalSupply();
+        uint256 safeShares = vault.balanceOf(SAFE);
+        uint256 managedAssets = vault.totalAssets();
+        uint256 cap = vault.depositCap();
+        bool wasPaused = vault.paused();
+        uint256 vaultXPharBefore = IERC20(XPHAR).balanceOf(address(vault));
+        uint256 safePharBefore = IERC20(PHAR).balanceOf(SAFE);
+
+        vm.prank(SAFE);
+        ProxyAdmin(proxyAdmin)
+            .upgradeAndCall(ITransparentUpgradeableProxy(payable(address(vault))), address(extension), bytes(""));
+
+        assertEq(_implementationOf(vault), address(extension));
+        assertEq(vault.tokenId(), positionId);
+        assertEq(vault.totalSupply(), supply);
+        assertEq(vault.balanceOf(SAFE), safeShares);
+        assertEq(vault.totalAssets(), managedAssets);
+        assertEq(vault.depositCap(), cap);
+        assertEq(vault.paused(), wasPaused);
+        assertEq(vault.owner(), SAFE);
+        assertEq(vault.rebalancer(), KEEPER);
+
+        vm.prank(SAFE);
+        (uint256 forwarded, uint256 exited) = PharaohRewardExtension(payable(address(vault))).harvestRewards(true, 0);
+
+        assertEq(exited, 0);
+        assertEq(IERC20(PHAR).balanceOf(address(vault)), 0);
+        assertEq(IERC20(PHAR).balanceOf(SAFE), safePharBefore + forwarded);
+        assertGe(IERC20(XPHAR).balanceOf(address(vault)), vaultXPharBefore);
+        assertEq(vault.tokenId(), positionId);
+        assertEq(vault.totalSupply(), supply);
+        assertEq(vault.balanceOf(SAFE), safeShares);
+        assertEq(vault.totalAssets(), managedAssets);
     }
 
     function _assertProxy(PharaohLiquidityVault vault, address expectedAdmin) private view {
@@ -188,28 +243,6 @@ contract PharaohDeploymentMainnetForkTest is Test {
 
     function _implementationOf(PharaohLiquidityVault vault) private view returns (address) {
         return address(uint160(uint256(vm.load(address(vault), ERC1967_IMPLEMENTATION_SLOT))));
-    }
-
-    function _installPartialExitHotfix(PharaohLiquidityVault vault, address admin, address hotfix) private {
-        uint256 supplyBefore = vault.totalSupply();
-        uint256 safeSharesBefore = vault.balanceOf(SAFE);
-        uint256 assetsBefore = vault.totalAssets();
-        uint256 tokenIdBefore = vault.tokenId();
-        uint256 capBefore = vault.depositCap();
-        bool pausedBefore = vault.paused();
-
-        vm.prank(SAFE);
-        ProxyAdmin(admin).upgradeAndCall(ITransparentUpgradeableProxy(payable(address(vault))), hotfix, bytes(""));
-
-        assertEq(_implementationOf(vault), hotfix);
-        assertEq(vault.totalSupply(), supplyBefore);
-        assertEq(vault.balanceOf(SAFE), safeSharesBefore);
-        assertEq(vault.totalAssets(), assetsBefore);
-        assertEq(vault.tokenId(), tokenIdBefore);
-        assertEq(vault.depositCap(), capBefore);
-        assertEq(vault.paused(), pausedBefore);
-        assertEq(vault.owner(), SAFE);
-        assertEq(vault.rebalancer(), KEEPER);
     }
 
     function _assertVault(
@@ -271,7 +304,7 @@ contract PharaohDeploymentMainnetForkTest is Test {
         vm.stopPrank();
     }
 
-    function _stagedRoundTrip(PharaohLiquidityVault vault, address asset, uint256 amount, uint256 temporaryCap)
+    function _stagedRoundTrip(PharaohLiquidityVault vault, address asset, uint256 amount)
         private
         returns (uint256 redeemed)
     {
@@ -283,7 +316,9 @@ contract PharaohDeploymentMainnetForkTest is Test {
 
         vm.startPrank(SAFE);
         IERC20(asset).approve(address(vault), amount);
-        vault.setDepositCap(temporaryCap);
+        // Zero means unlimited. This is safe only because all four Safe calls
+        // execute atomically and the final call restores the one-raw-unit cap.
+        vault.setDepositCap(0);
         uint256 stagedShares = vault.deposit(amount, SAFE);
         vault.setDepositCap(1);
         vm.stopPrank();

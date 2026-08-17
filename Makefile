@@ -13,7 +13,7 @@ LFJ_PRICE_ORACLE ?=
 LFJ_VALUATION_HAIRCUT_BPS ?= 200
 SIGNER_ARGS ?=
 
-.PHONY: build test test-pharaoh test-peridot-pharaoh-oracle test-pharaoh-fork check-pharaoh-safe-batches grow-pharaoh-observations check-pharaoh-observations deploy-pharaoh-dry-run deploy-pharaoh-mainnet deploy-pharaoh-upgrade-dry-run deploy-pharaoh-upgrade-mainnet prepare-pharaoh-upgrade deploy-pharaoh-hotfix-dry-run deploy-pharaoh-hotfix-mainnet prepare-pharaoh-hotfix pharaoh-status pharaoh-pnl-snapshot test-lfj-fork test-lfj-fork-pinned deploy-lfj-proxy-dry-run deploy-lfj-proxy-mainnet deploy-lfj-dry-run deploy-lfj-mainnet check-lfj apy-snapshot apy-compare
+.PHONY: build test test-pharaoh test-peridot-pharaoh-oracle test-pharaoh-fork check-pharaoh-safe-batches grow-pharaoh-observations check-pharaoh-observations deploy-pharaoh-dry-run deploy-pharaoh-mainnet deploy-pharaoh-upgrade-dry-run deploy-pharaoh-upgrade-mainnet prepare-pharaoh-upgrade deploy-pharaoh-hotfix-dry-run deploy-pharaoh-hotfix-mainnet prepare-pharaoh-hotfix deploy-pharaoh-reward-upgrade-dry-run deploy-pharaoh-reward-upgrade-mainnet prepare-pharaoh-reward-upgrade fund-pharaoh-small-stage-dry-run fund-pharaoh-small-stage-mainnet pharaoh-status pharaoh-pnl-snapshot test-lfj-fork test-lfj-fork-pinned deploy-lfj-proxy-dry-run deploy-lfj-proxy-mainnet deploy-lfj-dry-run deploy-lfj-mainnet check-lfj apy-snapshot apy-compare
 
 build:
 	forge build
@@ -72,6 +72,24 @@ deploy-pharaoh-hotfix-mainnet:
 prepare-pharaoh-hotfix:
 	$(if $(strip $(NEW_IMPLEMENTATION)),,$(error NEW_IMPLEMENTATION is required))
 	NEW_IMPLEMENTATION=$(NEW_IMPLEMENTATION) forge script script/DeployPharaohPartialExitHotfix.s.sol:PreparePharaohPartialExitHotfix --rpc-url $(AVAX_RPC) -vvv
+
+deploy-pharaoh-reward-upgrade-dry-run:
+	DEPLOYER=$(DEPLOYER) forge script script/DeployPharaohRewardExtension.s.sol:DeployPharaohRewardExtension --rpc-url $(AVAX_RPC) -vvv
+
+deploy-pharaoh-reward-upgrade-mainnet:
+	$(if $(strip $(SIGNER_ARGS)),,$(error SIGNER_ARGS is required, for example SIGNER_ARGS='--account my-keystore --verifier sourcify'))
+	DEPLOYER=$(DEPLOYER) forge script script/DeployPharaohRewardExtension.s.sol:DeployPharaohRewardExtension --rpc-url $(AVAX_RPC) --broadcast --verify $(SIGNER_ARGS) -vvv
+
+prepare-pharaoh-reward-upgrade:
+	$(if $(strip $(NEW_IMPLEMENTATION)),,$(error NEW_IMPLEMENTATION is required))
+	NEW_IMPLEMENTATION=$(NEW_IMPLEMENTATION) forge script script/DeployPharaohRewardExtension.s.sol:PreparePharaohRewardExtension --rpc-url $(AVAX_RPC) -vvv
+
+fund-pharaoh-small-stage-dry-run:
+	DEPLOYER=$(DEPLOYER) forge script script/FundPharaohSmallStage.s.sol:FundPharaohSmallStage --rpc-url $(AVAX_RPC) -vvv
+
+fund-pharaoh-small-stage-mainnet:
+	$(if $(strip $(SIGNER_ARGS)),,$(error SIGNER_ARGS is required, for example SIGNER_ARGS='--account my-keystore'))
+	DEPLOYER=$(DEPLOYER) forge script script/FundPharaohSmallStage.s.sol:FundPharaohSmallStage --rpc-url $(AVAX_RPC) --broadcast $(SIGNER_ARGS) -vvv
 
 pharaoh-status:
 	RPC=$(AVAX_RPC) ./scripts/pharaoh-pnl.sh

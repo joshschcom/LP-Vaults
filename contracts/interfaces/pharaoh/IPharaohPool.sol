@@ -8,6 +8,7 @@ interface IPharaohPool {
     function token1() external view returns (address);
     function fee() external view returns (uint24);
     function tickSpacing() external view returns (int24);
+    function liquidity() external view returns (uint128);
 
     function slot0()
         external

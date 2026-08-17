@@ -13,6 +13,7 @@ import {
 } from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 import {PharaohLiquidityVault} from "../contracts/PharaohLiquidityVault.sol";
+import {PharaohRewardExtension} from "../contracts/PharaohRewardExtension.sol";
 import {IPharaohFactory} from "../contracts/interfaces/pharaoh/IPharaohFactory.sol";
 import {IPharaohPool} from "../contracts/interfaces/pharaoh/IPharaohPool.sol";
 import {IPharaohPositionManager} from "../contracts/interfaces/pharaoh/IPharaohPositionManager.sol";
@@ -26,6 +27,20 @@ contract MockToken is ERC20 {
 
     function mint(address receiver, uint256 amount) external {
         _mint(receiver, amount);
+    }
+}
+
+contract MockXPhar is MockToken {
+    address private immutable phar;
+
+    constructor(address phar_) MockToken("xPHAR", "xPHAR") {
+        phar = phar_;
+    }
+
+    function exit(uint256 amount) external returns (uint256 pharReceived) {
+        _burn(msg.sender, amount);
+        pharReceived = amount / 2;
+        MockToken(phar).mint(msg.sender, pharReceived);
     }
 }
 
@@ -52,6 +67,7 @@ contract MockPharaohFactory is IPharaohFactory {
         address public immutable override token1;
         uint24 public constant override fee = 40;
         int24 public constant override tickSpacing = 1;
+        uint128 public constant override liquidity = 1;
 
         int24 public spotTick;
         int24 public meanTick;
@@ -162,6 +178,7 @@ contract MockPharaohFactory is IPharaohFactory {
                     address public immutable override deployer;
                     uint256 public nextTokenId = 1;
                     mapping(uint256 => PositionData) private _positions;
+                    mapping(address => uint256) public rewardAmount;
 
                     constructor(address deployer_) {
                         deployer = deployer_;
@@ -265,7 +282,20 @@ contract MockPharaohFactory is IPharaohFactory {
                         delete _positions[positionId];
                     }
 
-                    function getReward(uint256, address[] calldata) external payable override {}
+                    function setReward(address token, uint256 amount) external {
+                        rewardAmount[token] = amount;
+                    }
+
+                    function getReward(uint256 positionId, address[] calldata tokens) external payable override {
+                        PositionData storage p = _positions[positionId];
+                        require(msg.sender == p.owner, "not owner");
+                        for (uint256 i; i < tokens.length; ++i) {
+                            uint256 amount = rewardAmount[tokens[i]];
+                            if (amount == 0) continue;
+                            rewardAmount[tokens[i]] = 0;
+                            MockToken(tokens[i]).mint(p.owner, amount);
+                        }
+                    }
 
                     function _liquidityAndAmounts(int24 lower, int24 upper, uint256 desired0, uint256 desired1)
                         private
@@ -288,6 +318,11 @@ contract MockPharaohFactory is IPharaohFactory {
                     contract PharaohLiquidityVaultTest is Test {
                         bytes32 private constant ERC1967_ADMIN_SLOT =
                             0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
+                        address private constant BASE_IMPLEMENTATION = 0x37E28a2C9FA3bBdab81efA69D5D480f5107a3770;
+                        bytes32 private constant BASE_IMPLEMENTATION_CODEHASH =
+                            0x416f2a818693b20948fc44e9955ec7a370be051599b1eef6ca1fad932f3626ef;
+                        address private constant PHAR = 0x13A466998Ce03Db73aBc2d4DF3bBD845Ed1f28E7;
+                        address private constant XPHAR = 0xE8164Ea89665DAb7a553e667F81F30CfDA736B9A;
 
                         MockToken private pairToken;
                         MockToken private assetToken;
@@ -304,6 +339,11 @@ contract MockPharaohFactory is IPharaohFactory {
                         address private keeper = makeAddr("keeper");
 
                         function setUp() public {
+                            MockToken pharTemplate = new MockToken("PHAR", "PHAR");
+                            MockXPhar xPharTemplate = new MockXPhar(PHAR);
+                            vm.etch(PHAR, address(pharTemplate).code);
+                            vm.etch(XPHAR, address(xPharTemplate).code);
+
                             pairToken = new MockToken("Pair", "PAIR");
                             assetToken = new MockToken("Asset", "ASSET");
 
@@ -418,6 +458,115 @@ contract MockPharaohFactory is IPharaohFactory {
                             assertEq(vault.owner(), address(this));
                             assertEq(vault.rebalancer(), keeper);
                             assertEq(vault.convertToAssets(shares), valueBefore);
+                        }
+
+                        function test_rewardExtensionDelegatesExistingVaultAndPreservesStorage() public {
+                            uint256 shares = _deposit(alice, 1_000 ether);
+                            uint256 positionId = vault.tokenId();
+                            uint256 valueBefore = vault.convertToAssets(shares);
+
+                            _upgradeToRewardExtension();
+
+                            assertEq(vault.tokenId(), positionId);
+                            assertEq(vault.balanceOf(alice), shares);
+                            assertEq(vault.totalSupply(), shares);
+                            assertEq(vault.owner(), address(this));
+                            assertEq(vault.rebalancer(), keeper);
+                            assertEq(vault.convertToAssets(shares), valueBefore);
+
+                            vm.prank(alice);
+                            uint256 assets = vault.redeem(shares / 4, alice, alice);
+                            assertGt(assets, 0);
+                            assertGt(vault.balanceOf(alice), 0);
+                        }
+
+                        function test_rewardExtensionClaimsAndForwardsPharWhileRetainingXPhar() public {
+                            _deposit(alice, 1_000 ether);
+                            _upgradeToRewardExtension();
+                            positionManager.setReward(PHAR, 10 ether);
+                            positionManager.setReward(XPHAR, 4 ether);
+
+                            uint256 pharBefore = IERC20(PHAR).balanceOf(address(this));
+                            (uint256 forwarded, uint256 exited) =
+                                PharaohRewardExtension(payable(address(vault))).harvestRewards(true, 0);
+
+                            assertEq(forwarded, 10 ether);
+                            assertEq(exited, 0);
+                            assertEq(IERC20(PHAR).balanceOf(address(this)) - pharBefore, 10 ether);
+                            assertEq(IERC20(PHAR).balanceOf(address(vault)), 0);
+                            assertEq(IERC20(XPHAR).balanceOf(address(vault)), 4 ether);
+                        }
+
+                        function test_rewardExtensionExitsXPharWithMinimumAndForwardsAllPhar() public {
+                            _deposit(alice, 1_000 ether);
+                            _upgradeToRewardExtension();
+                            positionManager.setReward(PHAR, 10 ether);
+                            positionManager.setReward(XPHAR, 4 ether);
+
+                            (uint256 forwarded, uint256 exited) =
+                                PharaohRewardExtension(payable(address(vault))).harvestRewards(true, 2 ether);
+
+                            assertEq(forwarded, 12 ether);
+                            assertEq(exited, 4 ether);
+                            assertEq(IERC20(PHAR).balanceOf(address(this)), 12 ether);
+                            assertEq(IERC20(PHAR).balanceOf(address(vault)), 0);
+                            assertEq(IERC20(XPHAR).balanceOf(address(vault)), 0);
+                        }
+
+                        function test_rewardExtensionRevertsAtomicallyBelowXPharMinimum() public {
+                            _deposit(alice, 1_000 ether);
+                            _upgradeToRewardExtension();
+                            positionManager.setReward(PHAR, 10 ether);
+                            positionManager.setReward(XPHAR, 4 ether);
+
+                            vm.expectRevert(
+                                abi.encodeWithSelector(
+                                    PharaohRewardExtension.RewardExtension__InsufficientXPharExit.selector,
+                                    uint256(2 ether),
+                                    uint256(2 ether + 1)
+                                )
+                            );
+                            PharaohRewardExtension(payable(address(vault))).harvestRewards(true, 2 ether + 1);
+
+                            assertEq(IERC20(PHAR).balanceOf(address(vault)), 0);
+                            assertEq(IERC20(XPHAR).balanceOf(address(vault)), 0);
+                            assertEq(positionManager.rewardAmount(PHAR), 10 ether);
+                            assertEq(positionManager.rewardAmount(XPHAR), 4 ether);
+                        }
+
+                        function test_rewardExtensionCanForwardHeldPharWithoutClaiming() public {
+                            _upgradeToRewardExtension();
+                            MockToken(PHAR).mint(address(vault), 3 ether);
+
+                            (uint256 forwarded, uint256 exited) =
+                                PharaohRewardExtension(payable(address(vault))).harvestRewards(false, 0);
+
+                            assertEq(forwarded, 3 ether);
+                            assertEq(exited, 0);
+                            assertEq(IERC20(PHAR).balanceOf(address(this)), 3 ether);
+                        }
+
+                        function test_rewardExtensionRejectsNonOwner() public {
+                            _upgradeToRewardExtension();
+
+                            vm.prank(alice);
+                            vm.expectRevert(
+                                abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, alice)
+                            );
+                            PharaohRewardExtension(payable(address(vault))).harvestRewards(false, 0);
+                        }
+
+                        function test_rewardExtensionSharesOwnerStorageWithDelegatedBase() public {
+                            _upgradeToRewardExtension();
+                            vault.transferOwnership(bob);
+
+                            assertEq(vault.owner(), bob);
+                            vm.prank(bob);
+                            vault.setDepositCap(123 ether);
+                            assertEq(vault.depositCap(), 123 ether);
+
+                            vm.prank(bob);
+                            PharaohRewardExtension(payable(address(vault))).harvestRewards(false, 0);
                         }
 
                         function test_proxyUpgradeAtomicallyMigratesRiskParameters() public {
@@ -698,5 +847,14 @@ contract MockPharaohFactory is IPharaohFactory {
                         function _deposit(address user, uint256 assets) private returns (uint256 shares) {
                             vm.prank(user);
                             shares = vault.deposit(assets, user);
+                        }
+
+                        function _upgradeToRewardExtension() private {
+                            vm.etch(BASE_IMPLEMENTATION, type(PharaohLiquidityVault).runtimeCode);
+                            assertEq(BASE_IMPLEMENTATION.codehash, BASE_IMPLEMENTATION_CODEHASH);
+                            PharaohRewardExtension extension = new PharaohRewardExtension();
+                            proxyAdmin.upgradeAndCall(
+                                ITransparentUpgradeableProxy(address(vault)), address(extension), bytes("")
+                            );
                         }
                     }
