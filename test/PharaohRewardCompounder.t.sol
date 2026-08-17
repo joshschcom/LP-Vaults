@@ -203,6 +203,19 @@ contract CompounderTestRouter is IPharaohSwapRouter {
             assertEq(phar.balanceOf(address(safe)), 97 ether);
         }
 
+        function test_pharDustCannotBlockCompoundingOrBypassMaximum() public {
+            phar.mint(address(compounder), 5 ether);
+
+            vm.prank(address(safe));
+            (uint256 actualIn,) = compounder.compound(address(wavaxVault), 3 ether, 3 ether, 1, DEADLINE);
+
+            assertEq(actualIn, 3 ether);
+            assertEq(router.lastAmountIn(), 3 ether);
+            assertEq(phar.balanceOf(address(safe)), 102 ether);
+            assertEq(phar.balanceOf(address(compounder)), 0);
+            assertEq(phar.allowance(address(compounder), address(router)), 0);
+        }
+
         function test_revertsForUnauthorizedCaller() public {
             vm.expectRevert(
                 abi.encodeWithSelector(PharaohRewardCompounder.Compounder__Unauthorized.selector, address(this))
