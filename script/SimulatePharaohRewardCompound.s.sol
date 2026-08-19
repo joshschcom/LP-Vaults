@@ -49,7 +49,6 @@ contract SimulatePharaohRewardCompound is Script {
 
         require(targetVault == USDC_VAULT || targetVault == WAVAX_VAULT, "RewardSim: invalid target");
         require(PHAR.balanceOf(SAFE) == expectedSafePhar, "RewardSim: Safe PHAR changed");
-        require(PHAR.balanceOf(address(COMPOUNDER)) == 0, "RewardSim: compounder PHAR dust");
         require(PHAR.allowance(SAFE, address(COMPOUNDER)) == 0, "RewardSim: Safe allowance");
         require(
             PHAR.allowance(address(COMPOUNDER), address(COMPOUNDER.swapRouter())) == 0, "RewardSim: router allowance"
@@ -74,6 +73,9 @@ contract SimulatePharaohRewardCompound is Script {
         uint256 carrySupplyBefore = carryPharIn == 0 ? 0 : IPharaohRewardHarvester(carryVault).totalSupply();
         uint256 safeXPharBefore = XPHAR.balanceOf(SAFE);
         uint256 targetXPharBefore = XPHAR.balanceOf(targetVault);
+        uint256 compounderPharBefore = PHAR.balanceOf(address(COMPOUNDER));
+        uint256 compounderWavaxBefore = WAVAX.balanceOf(address(COMPOUNDER));
+        uint256 compounderUsdcBefore = USDC.balanceOf(address(COMPOUNDER));
 
         vm.startPrank(SAFE);
         require(PHAR.approve(address(COMPOUNDER), approvalAmount), "RewardSim: approve failed");
@@ -114,10 +116,11 @@ contract SimulatePharaohRewardCompound is Script {
             );
         }
 
-        require(PHAR.balanceOf(SAFE) == 0, "RewardSim: Safe PHAR remains");
+        uint256 expectedSafePharAfter = expectedSafePhar - carryPharIn + compounderPharBefore + harvestedPhar - pharIn;
+        require(PHAR.balanceOf(SAFE) == expectedSafePharAfter, "RewardSim: Safe PHAR conservation");
         require(PHAR.balanceOf(address(COMPOUNDER)) == 0, "RewardSim: compounder PHAR remains");
-        require(WAVAX.balanceOf(address(COMPOUNDER)) == 0, "RewardSim: compounder WAVAX remains");
-        require(USDC.balanceOf(address(COMPOUNDER)) == 0, "RewardSim: compounder USDC remains");
+        require(WAVAX.balanceOf(address(COMPOUNDER)) == compounderWavaxBefore, "RewardSim: compounder WAVAX changed");
+        require(USDC.balanceOf(address(COMPOUNDER)) == compounderUsdcBefore, "RewardSim: compounder USDC changed");
         require(PHAR.allowance(SAFE, address(COMPOUNDER)) == 0, "RewardSim: Safe allowance remains");
         require(
             PHAR.allowance(address(COMPOUNDER), address(COMPOUNDER.swapRouter())) == 0,
@@ -130,6 +133,7 @@ contract SimulatePharaohRewardCompound is Script {
         console2.log("Estimated PHAR harvested:", harvestedPhar);
         console2.log("PHAR compounded to target:", pharIn);
         console2.log("Target asset donated:", assetOut);
+        console2.log("Safe PHAR left outside bounds:", expectedSafePharAfter);
         if (carryPharIn != 0) {
             console2.log("Historical carry vault:", carryVault);
             console2.log("Historical PHAR carry compounded:", carryPharIn);

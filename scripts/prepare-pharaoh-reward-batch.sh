@@ -276,13 +276,9 @@ check_pool "WAVAX/USDC pool" "$WAVAX_USDC_POOL" "$WAVAX_USDC_POOL_CODEHASH" "$WA
 check_vault "USDC vault" "$USDC_VAULT" "$USDC" "$USDC_PROXY_ADMIN"
 check_vault "WAVAX vault" "$WAVAX_VAULT" "$WAVAX" "$WAVAX_PROXY_ADMIN"
 
-for token in "$PHAR" "$WAVAX" "$USDC"; do
-  balance=$(token_balance "$token" "$COMPOUNDER")
-  if [[ "$balance" != "0" ]]; then
-    echo "compounder holds token $token: $balance" >&2
-    exit 1
-  fi
-done
+compounder_phar=$(token_balance "$PHAR" "$COMPOUNDER")
+compounder_wavax=$(token_balance "$WAVAX" "$COMPOUNDER")
+compounder_usdc=$(token_balance "$USDC" "$COMPOUNDER")
 safe_allowance=$(token_allowance "$PHAR" "$SAFE" "$COMPOUNDER")
 router_allowance=$(token_allowance "$PHAR" "$COMPOUNDER" "$SWAP_ROUTER")
 if [[ "$safe_allowance" != "0" || "$router_allowance" != "0" ]]; then
@@ -328,8 +324,10 @@ CARRY_VAULT="0x0000000000000000000000000000000000000000"
 CARRY_PHAR_IN="0"
 CARRY_MINIMUM_RATE="0"
 TARGET_EXISTING_PHAR="0"
+UNATTRIBUTED_SAFE_PHAR="$safe_phar"
 
-if [[ "$safe_phar" == "$HISTORICAL_TOTAL_PHAR" ]]; then
+if [[ "$(bc <<< "$safe_phar >= $HISTORICAL_TOTAL_PHAR")" == "1" ]]; then
+  UNATTRIBUTED_SAFE_PHAR=$(bc <<< "$safe_phar - $HISTORICAL_TOTAL_PHAR")
   if [[ "$TARGET" == "usdc" ]]; then
     CARRY_VAULT="$WAVAX_VAULT"
     CARRY_PHAR_IN="$HISTORICAL_WAVAX_PHAR"
@@ -341,10 +339,6 @@ if [[ "$safe_phar" == "$HISTORICAL_TOTAL_PHAR" ]]; then
     CARRY_MINIMUM_RATE="$minimum_usdc_rate"
     TARGET_EXISTING_PHAR="$HISTORICAL_WAVAX_PHAR"
   fi
-elif [[ "$safe_phar" != "0" ]]; then
-  echo "Safe holds unrelated or unexpected PHAR: $safe_phar" >&2
-  echo "expected either zero or the attributed historical total $HISTORICAL_TOTAL_PHAR" >&2
-  exit 1
 fi
 
 MINIMUM_PHAR_IN=$(bc <<< "$TARGET_EXISTING_PHAR + $minimum_fresh_phar")
@@ -400,7 +394,7 @@ if [[ "$CARRY_PHAR_IN" != "0" ]]; then
     "$DEADLINE")
 fi
 
-description="Fresh-quote Pharaoh $TARGET_LABEL reward cycle prepared at block $CURRENT_BLOCK. The batch grants a bounded temporary PHAR allowance, preserves any attributed historical carry, harvests liquid PHAR while retaining xPHAR, compounds through the pinned Pharaoh route into the originating vault, and revokes the allowance. Minimum fresh reward value is $MIN_REWARD_VALUE_USDC_RAW raw USDC, maximum fresh-reward growth is $MAX_FRESH_REWARD_GROWTH_BPS bps, slippage is $SLIPPAGE_BPS bps, and deadline is $DEADLINE. Every call uses native value zero and CALL operation. Exact call order passed a finalized-block fork simulation before this file was written."
+description="Fresh-quote Pharaoh $TARGET_LABEL reward cycle prepared at block $CURRENT_BLOCK. The batch grants a bounded temporary PHAR allowance, preserves any attributed historical carry, harvests liquid PHAR while retaining xPHAR, compounds through the pinned Pharaoh route into the originating vault, and revokes the allowance. Pre-existing unattributed Safe PHAR is $UNATTRIBUTED_SAFE_PHAR raw and does not enlarge the allowance or input cap; excess remains in the Safe. Pre-existing compounder balances are PHAR=$compounder_phar, WAVAX=$compounder_wavax, USDC=$compounder_usdc raw and are conservation-checked by the fork simulation. Minimum fresh reward value is $MIN_REWARD_VALUE_USDC_RAW raw USDC, maximum fresh-reward growth is $MAX_FRESH_REWARD_GROWTH_BPS bps, slippage is $SLIPPAGE_BPS bps, and deadline is $DEADLINE. Every call uses native value zero and CALL operation. Exact call order passed a finalized-block fork simulation before this file was written."
 
 output_dir=$(dirname "$OUTPUT")
 mkdir -p "$output_dir"
@@ -479,6 +473,12 @@ echo "Temporary PHAR approval:       $APPROVAL_AMOUNT"
 echo "Minimum asset/PHAR rate:       $MINIMUM_ASSET_OUT_PER_PHAR"
 echo "Deadline:                      $DEADLINE"
 echo "Safe checksum:                 $checksum"
+if [[ "$UNATTRIBUTED_SAFE_PHAR" != "0" ]]; then
+  echo "REVIEW Safe unattributed PHAR: $UNATTRIBUTED_SAFE_PHAR (excluded from bounds)"
+fi
+if [[ "$compounder_phar" != "0" || "$compounder_wavax" != "0" || "$compounder_usdc" != "0" ]]; then
+  echo "REVIEW compounder dust:        PHAR=$compounder_phar WAVAX=$compounder_wavax USDC=$compounder_usdc"
+fi
 if [[ "$CARRY_PHAR_IN" != "0" ]]; then
   echo "Historical carry PHAR:         $CARRY_PHAR_IN -> $CARRY_VAULT"
 fi

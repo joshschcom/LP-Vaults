@@ -124,6 +124,16 @@ monitor_nonzero() {
   fi
 }
 
+monitor_recoverable_balance() {
+  local label="$1"
+  local actual="$2"
+  if [[ "$actual" == "0" ]]; then
+    echo "OK    $label: 0"
+  else
+    echo "WARN  $label: $actual (recoverable dust; does not block bounded batches)"
+  fi
+}
+
 codehash_at_block() {
   local runtime_code
   runtime_code=$(cast code "$1" --rpc-url "$RPC" --block "$CURRENT_BLOCK")
@@ -539,9 +549,9 @@ monitor_compounder() {
   monitor_nonzero "WAVAX vault share supply" "$wavax_supply"
   monitor_invariant "USDC shares owned by Safe" "$usdc_safe_shares" "$usdc_supply"
   monitor_invariant "WAVAX shares owned by Safe" "$wavax_safe_shares" "$wavax_supply"
-  monitor_invariant "compounder PHAR balance" "$compounder_phar" "0"
-  monitor_invariant "compounder WAVAX balance" "$compounder_wavax" "0"
-  monitor_invariant "compounder USDC balance" "$compounder_usdc" "0"
+  monitor_recoverable_balance "compounder PHAR balance" "$compounder_phar"
+  monitor_recoverable_balance "compounder WAVAX balance" "$compounder_wavax"
+  monitor_recoverable_balance "compounder USDC balance" "$compounder_usdc"
   monitor_invariant "Safe PHAR allowance" "$safe_allowance" "0"
   monitor_invariant "router PHAR allowance" "$router_allowance" "0"
   echo ""

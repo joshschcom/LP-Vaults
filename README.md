@@ -184,14 +184,17 @@ The normal batch is PHAR approval, `harvestRewards(true, 0)`, `compound`, and
 approval revocation. It retains xPHAR. On the first cycle only, the generator
 recognizes the exact `0.061374957067274031 PHAR` historical Safe inventory and
 adds one bounded compound call so the previously recorded USDC-vault and
-WAVAX-vault reward portions remain attributed to their originating vaults. It
-rejects any other pre-existing Safe PHAR balance. Never import a generated file
-after its deadline, and review every decoded target, argument, native value,
-and call order in Safe before signing. The current generator intentionally
-requires closed deposit caps and exclusive Safe share ownership; do not reuse
-this canary workflow after shares are distributed or deposits are reopened.
-A public vault needs a separately reviewed anti-reward-sniping policy before
-discrete harvested rewards are donated to share value.
+WAVAX-vault reward portions remain attributed to their originating vaults.
+Third-party dust cannot block generation: any unattributed Safe balance or
+pre-existing compounder dust is printed for review, does not enlarge the
+calculated approval or target input cap, and is conservation-checked so excess
+PHAR remains in the Safe. Never import a generated file after its deadline, and
+review every decoded target, argument, native value, warning, and call order in
+Safe before signing. The current generator intentionally requires closed
+deposit caps and exclusive Safe share ownership; do not reuse this canary
+workflow after shares are distributed or deposits are reopened. A public vault
+needs a separately reviewed anti-reward-sniping policy before discrete
+harvested rewards are donated to share value.
 
 The guarded single-use commands used for the implementation deployment were:
 

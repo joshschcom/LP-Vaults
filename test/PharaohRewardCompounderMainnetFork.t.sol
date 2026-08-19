@@ -223,6 +223,44 @@ contract PharaohRewardCompounderMainnetForkTest is Test {
         _assertLiveCleared();
     }
 
+    function test_liveDeployedDustCannotBlockOrEnlargeBoundedInput() public {
+        _requireFork();
+        _requireLiveCompounder();
+
+        uint256 reward = 1 ether;
+        uint256 unrelatedSafePhar = 0.2 ether;
+        uint256 compounderDust = 0.1 ether;
+        deal(PHAR, SAFE, unrelatedSafePhar, true);
+        deal(PHAR, address(WAVAX_VAULT), reward, true);
+        deal(PHAR, address(LIVE_COMPOUNDER), compounderDust, true);
+
+        (uint256 quote,,,) = QUOTER.quoteExactInputSingle(
+            IPharaohQuoterV2.QuoteExactInputSingleParams({
+                tokenIn: PHAR, tokenOut: WAVAX, amountIn: reward, tickSpacing: PHAR_WAVAX_SPACING, sqrtPriceLimitX96: 0
+            })
+        );
+        uint256 minimumRate = (quote * 95) / 100;
+        uint256 vaultBalanceBefore = IERC20(WAVAX).balanceOf(address(WAVAX_VAULT));
+        uint256 supplyBefore = WAVAX_VAULT.totalSupply();
+
+        vm.startPrank(SAFE);
+        IERC20(PHAR).approve(address(LIVE_COMPOUNDER), reward);
+        (uint256 harvested,) = PharaohRewardExtension(payable(address(WAVAX_VAULT))).harvestRewards(false, 0);
+        (uint256 pharIn, uint256 assetOut) =
+            LIVE_COMPOUNDER.compound(address(WAVAX_VAULT), reward, reward, minimumRate, block.timestamp + 5 minutes);
+        IERC20(PHAR).approve(address(LIVE_COMPOUNDER), 0);
+        vm.stopPrank();
+
+        assertEq(harvested, reward);
+        assertEq(pharIn, reward);
+        assertEq(IERC20(PHAR).balanceOf(SAFE), unrelatedSafePhar + compounderDust);
+        assertEq(IERC20(PHAR).balanceOf(address(LIVE_COMPOUNDER)), 0);
+        assertEq(IERC20(PHAR).allowance(SAFE, address(LIVE_COMPOUNDER)), 0);
+        assertEq(IERC20(PHAR).allowance(address(LIVE_COMPOUNDER), address(SWAP_ROUTER)), 0);
+        assertEq(IERC20(WAVAX).balanceOf(address(WAVAX_VAULT)) - vaultBalanceBefore, assetOut);
+        assertEq(WAVAX_VAULT.totalSupply(), supplyBefore);
+    }
+
     function _fundAndApprove(uint256 amount) private {
         deal(PHAR, SAFE, amount, true);
         vm.prank(SAFE);
