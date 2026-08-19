@@ -37,11 +37,11 @@ readonly ERC1967_ADMIN_SLOT="0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d
 readonly HISTORICAL_USDC_PHAR="10884615830873552"
 readonly HISTORICAL_WAVAX_PHAR="50490341236400479"
 readonly HISTORICAL_TOTAL_PHAR="61374957067274031"
+readonly MAX_FRESH_REWARD_GROWTH_BPS="500"
 
 MIN_REWARD_VALUE_USDC_RAW="${MIN_REWARD_VALUE_USDC_RAW:-100000}"
 SLIPPAGE_BPS="${SLIPPAGE_BPS:-500}"
 DEADLINE_SECONDS="${DEADLINE_SECONDS:-1800}"
-MAX_UINT256="115792089237316195423570985008687907853269984665640564039457584007913129639935"
 
 for command in cast forge jq bc; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
@@ -62,18 +62,24 @@ case "$TARGET" in
     ;;
 esac
 
-if ! [[ "$MIN_REWARD_VALUE_USDC_RAW" =~ ^[0-9]+$ ]] || [[ "$MIN_REWARD_VALUE_USDC_RAW" == "0" ]]; then
+if ! [[ "$MIN_REWARD_VALUE_USDC_RAW" =~ ^[0-9]+$ ]] \
+  || [[ "$(bc <<< "$MIN_REWARD_VALUE_USDC_RAW <= 0")" == "1" ]]; then
   echo "MIN_REWARD_VALUE_USDC_RAW must be a positive integer" >&2
   exit 1
 fi
-if ! [[ "$SLIPPAGE_BPS" =~ ^[0-9]+$ ]] || (( SLIPPAGE_BPS == 0 || SLIPPAGE_BPS > 2000 )); then
+if ! [[ "$SLIPPAGE_BPS" =~ ^[0-9]+$ ]] \
+  || [[ "$(bc <<< "$SLIPPAGE_BPS < 1 || $SLIPPAGE_BPS > 2000")" == "1" ]]; then
   echo "SLIPPAGE_BPS must be between 1 and 2000" >&2
   exit 1
 fi
-if ! [[ "$DEADLINE_SECONDS" =~ ^[0-9]+$ ]] || (( DEADLINE_SECONDS < 300 || DEADLINE_SECONDS > 3600 )); then
+if ! [[ "$DEADLINE_SECONDS" =~ ^[0-9]+$ ]] \
+  || [[ "$(bc <<< "$DEADLINE_SECONDS < 300 || $DEADLINE_SECONDS > 3600")" == "1" ]]; then
   echo "DEADLINE_SECONDS must be between 300 and 3600" >&2
   exit 1
 fi
+MIN_REWARD_VALUE_USDC_RAW=$(bc <<< "$MIN_REWARD_VALUE_USDC_RAW / 1")
+SLIPPAGE_BPS=$(bc <<< "$SLIPPAGE_BPS / 1")
+DEADLINE_SECONDS=$(bc <<< "$DEADLINE_SECONDS / 1")
 
 normalize_num() {
   echo "$1" | awk '{print $1}'
@@ -342,6 +348,14 @@ elif [[ "$safe_phar" != "0" ]]; then
 fi
 
 MINIMUM_PHAR_IN=$(bc <<< "$TARGET_EXISTING_PHAR + $minimum_fresh_phar")
+maximum_fresh_phar=$(bc <<< \
+  "(($pending_phar * (10000 + $MAX_FRESH_REWARD_GROWTH_BPS)) + 9999) / 10000")
+MAXIMUM_PHAR_IN=$(bc <<< "$TARGET_EXISTING_PHAR + $maximum_fresh_phar")
+APPROVAL_AMOUNT=$(bc <<< "$CARRY_PHAR_IN + $MAXIMUM_PHAR_IN")
+if [[ "$(bc <<< "$MINIMUM_PHAR_IN > $MAXIMUM_PHAR_IN")" == "1" ]]; then
+  echo "fresh reward bounds are inconsistent at block $CURRENT_BLOCK" >&2
+  exit 1
+fi
 if [[ "$TARGET" == "usdc" ]]; then
   MINIMUM_ASSET_OUT_PER_PHAR="$minimum_usdc_rate"
 else
@@ -351,7 +365,9 @@ fi
 echo "Fork-simulating the exact Safe call order at block $CURRENT_BLOCK..."
 TARGET_VAULT="$TARGET_VAULT" \
 EXPECTED_SAFE_PHAR="$safe_phar" \
+APPROVAL_AMOUNT="$APPROVAL_AMOUNT" \
 MINIMUM_PHAR_IN="$MINIMUM_PHAR_IN" \
+MAXIMUM_PHAR_IN="$MAXIMUM_PHAR_IN" \
 MINIMUM_ASSET_OUT_PER_PHAR="$MINIMUM_ASSET_OUT_PER_PHAR" \
 DEADLINE="$DEADLINE" \
 CARRY_VAULT="$CARRY_VAULT" \
@@ -363,13 +379,13 @@ forge script \
   --fork-block-number "$CURRENT_BLOCK" \
   -vvv
 
-approve_data=$(cast calldata 'approve(address,uint256)' "$COMPOUNDER" "$MAX_UINT256")
+approve_data=$(cast calldata 'approve(address,uint256)' "$COMPOUNDER" "$APPROVAL_AMOUNT")
 harvest_data=$(cast calldata 'harvestRewards(bool,uint256)' true 0)
 compound_data=$(cast calldata \
   'compound(address,uint256,uint256,uint256,uint256)' \
   "$TARGET_VAULT" \
   "$MINIMUM_PHAR_IN" \
-  "$MAX_UINT256" \
+  "$MAXIMUM_PHAR_IN" \
   "$MINIMUM_ASSET_OUT_PER_PHAR" \
   "$DEADLINE")
 revoke_data=$(cast calldata 'approve(address,uint256)' "$COMPOUNDER" 0)
@@ -384,7 +400,7 @@ if [[ "$CARRY_PHAR_IN" != "0" ]]; then
     "$DEADLINE")
 fi
 
-description="Fresh-quote Pharaoh $TARGET_LABEL reward cycle prepared at block $CURRENT_BLOCK. The batch grants a temporary PHAR allowance, preserves any attributed historical carry, harvests liquid PHAR while retaining xPHAR, compounds through the pinned Pharaoh route into the originating vault, and revokes the allowance. Minimum fresh reward value is $MIN_REWARD_VALUE_USDC_RAW raw USDC, slippage is $SLIPPAGE_BPS bps, and deadline is $DEADLINE. Every call uses native value zero and CALL operation. Exact call order passed a finalized-block fork simulation before this file was written."
+description="Fresh-quote Pharaoh $TARGET_LABEL reward cycle prepared at block $CURRENT_BLOCK. The batch grants a bounded temporary PHAR allowance, preserves any attributed historical carry, harvests liquid PHAR while retaining xPHAR, compounds through the pinned Pharaoh route into the originating vault, and revokes the allowance. Minimum fresh reward value is $MIN_REWARD_VALUE_USDC_RAW raw USDC, maximum fresh-reward growth is $MAX_FRESH_REWARD_GROWTH_BPS bps, slippage is $SLIPPAGE_BPS bps, and deadline is $DEADLINE. Every call uses native value zero and CALL operation. Exact call order passed a finalized-block fork simulation before this file was written."
 
 output_dir=$(dirname "$OUTPUT")
 mkdir -p "$output_dir"
@@ -458,6 +474,8 @@ echo "Prepared checksummed Safe batch: $OUTPUT"
 echo "Target vault:                  $TARGET_VAULT"
 echo "Estimated fresh PHAR:          $pending_phar"
 echo "Minimum PHAR accepted:         $MINIMUM_PHAR_IN"
+echo "Maximum PHAR consumed:         $MAXIMUM_PHAR_IN"
+echo "Temporary PHAR approval:       $APPROVAL_AMOUNT"
 echo "Minimum asset/PHAR rate:       $MINIMUM_ASSET_OUT_PER_PHAR"
 echo "Deadline:                      $DEADLINE"
 echo "Safe checksum:                 $checksum"

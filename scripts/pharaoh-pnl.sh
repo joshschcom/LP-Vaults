@@ -58,10 +58,13 @@ for value_name in PHAR_COMPOUND_MIN_USDC_RAW USDC_COST_BASIS_RAW WAVAX_COST_BASI
     exit 1
   fi
 done
-if [[ "$PHAR_COMPOUND_MIN_USDC_RAW" == "0" ]]; then
+if [[ "$(bc <<< "$PHAR_COMPOUND_MIN_USDC_RAW <= 0")" == "1" ]]; then
   echo "PHAR_COMPOUND_MIN_USDC_RAW must be positive" >&2
   exit 1
 fi
+PHAR_COMPOUND_MIN_USDC_RAW=$(bc <<< "$PHAR_COMPOUND_MIN_USDC_RAW / 1")
+USDC_COST_BASIS_RAW=$(bc <<< "$USDC_COST_BASIS_RAW / 1")
+WAVAX_COST_BASIS_RAW=$(bc <<< "$WAVAX_COST_BASIS_RAW / 1")
 
 WRITE_SNAPSHOT=false
 case "${1:-}" in

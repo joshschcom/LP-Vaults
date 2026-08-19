@@ -38,7 +38,9 @@ contract SimulatePharaohRewardCompound is Script {
 
         address targetVault = vm.envAddress("TARGET_VAULT");
         uint256 expectedSafePhar = vm.envUint("EXPECTED_SAFE_PHAR");
+        uint256 approvalAmount = vm.envUint("APPROVAL_AMOUNT");
         uint256 minimumPharIn = vm.envUint("MINIMUM_PHAR_IN");
+        uint256 maximumPharIn = vm.envUint("MAXIMUM_PHAR_IN");
         uint256 minimumRate = vm.envUint("MINIMUM_ASSET_OUT_PER_PHAR");
         uint256 deadline = vm.envUint("DEADLINE");
         address carryVault = vm.envOr("CARRY_VAULT", address(0));
@@ -53,6 +55,7 @@ contract SimulatePharaohRewardCompound is Script {
             PHAR.allowance(address(COMPOUNDER), address(COMPOUNDER.swapRouter())) == 0, "RewardSim: router allowance"
         );
         require(deadline >= block.timestamp, "RewardSim: expired");
+        require(minimumPharIn != 0 && maximumPharIn >= minimumPharIn, "RewardSim: target bounds");
 
         if (carryPharIn == 0) {
             require(carryVault == address(0) && carryMinimumRate == 0, "RewardSim: unexpected carry");
@@ -61,6 +64,7 @@ contract SimulatePharaohRewardCompound is Script {
             require(carryVault != targetVault, "RewardSim: carry equals target");
             require(carryPharIn <= expectedSafePhar && carryMinimumRate != 0, "RewardSim: invalid carry");
         }
+        require(approvalAmount == carryPharIn + maximumPharIn, "RewardSim: approval mismatch");
 
         IERC20 targetAsset = targetVault == USDC_VAULT ? USDC : WAVAX;
         IERC20 carryAsset = carryVault == USDC_VAULT ? USDC : WAVAX;
@@ -72,7 +76,7 @@ contract SimulatePharaohRewardCompound is Script {
         uint256 targetXPharBefore = XPHAR.balanceOf(targetVault);
 
         vm.startPrank(SAFE);
-        require(PHAR.approve(address(COMPOUNDER), type(uint256).max), "RewardSim: approve failed");
+        require(PHAR.approve(address(COMPOUNDER), approvalAmount), "RewardSim: approve failed");
 
         uint256 carryOut;
         if (carryPharIn != 0) {
@@ -86,11 +90,12 @@ contract SimulatePharaohRewardCompound is Script {
         require(exitedXPhar == 0, "RewardSim: xPHAR exited");
 
         (uint256 pharIn, uint256 assetOut) =
-            COMPOUNDER.compound(targetVault, minimumPharIn, type(uint256).max, minimumRate, deadline);
+            COMPOUNDER.compound(targetVault, minimumPharIn, maximumPharIn, minimumRate, deadline);
         require(PHAR.approve(address(COMPOUNDER), 0), "RewardSim: revoke failed");
         vm.stopPrank();
 
         require(pharIn >= minimumPharIn, "RewardSim: target input below minimum");
+        require(pharIn <= maximumPharIn, "RewardSim: target input above maximum");
         require(assetOut >= Math.mulDiv(pharIn, minimumRate, PHAR_UNIT), "RewardSim: target output below minimum");
         require(targetAsset.balanceOf(targetVault) - targetAssetsBefore == assetOut, "RewardSim: target donation");
         require(

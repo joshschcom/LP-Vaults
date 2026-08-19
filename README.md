@@ -165,8 +165,10 @@ Builder batch for that originating vault. The generator pins the current block,
 repeats the monitor's bytecode, route, proxy, ownership, position, balance, and
 allowance checks for both vaults, obtains current Pharaoh quotes, enforces the
 economic threshold on the exact pending amount, sets a 5% minimum-rate margin
-and a 30-minute deadline, and fork-simulates the exact calls before atomically
-writing a checksummed, non-overwriting JSON file under `/tmp`:
+and a 30-minute deadline, caps fresh PHAR consumption at 5% above the simulated
+pending amount, grants only the carry plus that capped amount as a temporary
+allowance, and fork-simulates the exact calls before atomically writing a
+checksummed, non-overwriting JSON file under `/tmp`:
 
 ```bash
 make prepare-pharaoh-reward-batch \
@@ -185,7 +187,11 @@ adds one bounded compound call so the previously recorded USDC-vault and
 WAVAX-vault reward portions remain attributed to their originating vaults. It
 rejects any other pre-existing Safe PHAR balance. Never import a generated file
 after its deadline, and review every decoded target, argument, native value,
-and call order in Safe before signing.
+and call order in Safe before signing. The current generator intentionally
+requires closed deposit caps and exclusive Safe share ownership; do not reuse
+this canary workflow after shares are distributed or deposits are reopened.
+A public vault needs a separately reviewed anti-reward-sniping policy before
+discrete harvested rewards are donated to share value.
 
 The guarded single-use commands used for the implementation deployment were:
 

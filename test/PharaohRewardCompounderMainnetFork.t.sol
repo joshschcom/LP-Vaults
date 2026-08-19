@@ -199,7 +199,7 @@ contract PharaohRewardCompounderMainnetForkTest is Test {
         uint256 usdcSupplyBefore = USDC_VAULT.totalSupply();
 
         vm.startPrank(SAFE);
-        IERC20(PHAR).approve(address(LIVE_COMPOUNDER), type(uint256).max);
+        IERC20(PHAR).approve(address(LIVE_COMPOUNDER), historicalTotal + freshUsdcPhar);
         (uint256 carryIn, uint256 carryOut) = LIVE_COMPOUNDER.compound(
             address(WAVAX_VAULT), HISTORICAL_WAVAX_PHAR, HISTORICAL_WAVAX_PHAR, wavaxRate, block.timestamp + 5 minutes
         );
@@ -207,7 +207,7 @@ contract PharaohRewardCompounderMainnetForkTest is Test {
         (uint256 targetIn, uint256 targetOut) = LIVE_COMPOUNDER.compound(
             address(USDC_VAULT),
             freshUsdcPhar + HISTORICAL_USDC_PHAR,
-            type(uint256).max,
+            freshUsdcPhar + HISTORICAL_USDC_PHAR,
             usdcRate,
             block.timestamp + 5 minutes
         );
@@ -265,10 +265,10 @@ contract PharaohRewardCompounderMainnetForkTest is Test {
         uint256 supplyBefore = PharaohLiquidityVault(targetVault).totalSupply();
 
         vm.startPrank(SAFE);
-        IERC20(PHAR).approve(address(LIVE_COMPOUNDER), type(uint256).max);
+        IERC20(PHAR).approve(address(LIVE_COMPOUNDER), reward);
         (uint256 harvested, uint256 exited) = PharaohRewardExtension(payable(targetVault)).harvestRewards(false, 0);
         (uint256 pharIn, uint256 assetOut) =
-            LIVE_COMPOUNDER.compound(targetVault, reward, type(uint256).max, minimumRate, block.timestamp + 5 minutes);
+            LIVE_COMPOUNDER.compound(targetVault, reward, reward, minimumRate, block.timestamp + 5 minutes);
         IERC20(PHAR).approve(address(LIVE_COMPOUNDER), 0);
         vm.stopPrank();
 
