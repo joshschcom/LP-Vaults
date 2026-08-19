@@ -6,6 +6,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {PharaohLiquidityVault} from "../contracts/PharaohLiquidityVault.sol";
 import {PharaohRewardCompounder} from "../contracts/PharaohRewardCompounder.sol";
+import {PharaohRewardExtension} from "../contracts/PharaohRewardExtension.sol";
 import {IPharaohFactory} from "../contracts/interfaces/pharaoh/IPharaohFactory.sol";
 import {IPharaohPool} from "../contracts/interfaces/pharaoh/IPharaohPool.sol";
 import {IPharaohQuoterV2} from "../contracts/interfaces/pharaoh/IPharaohQuoterV2.sol";
@@ -32,6 +33,13 @@ contract PharaohRewardCompounderMainnetForkTest is Test {
         PharaohLiquidityVault(0x855bF832f26a294d28500db59eE941dE3d654129);
     PharaohLiquidityVault private constant WAVAX_VAULT =
         PharaohLiquidityVault(0xe9a53f0077f9cf767a95Ce75Da483E906eE190E8);
+    PharaohRewardCompounder private constant LIVE_COMPOUNDER =
+        PharaohRewardCompounder(0xe7fCeE8d52B5340168eb33804c49BE086cE04cB0);
+    bytes32 private constant LIVE_COMPOUNDER_CODEHASH =
+        0xbdf6e858119981209156b7d7619201a9b8aed2c5ab6fb5d04611b60cfd89b1c5;
+
+    uint256 private constant HISTORICAL_USDC_PHAR = 10_884_615_830_873_552;
+    uint256 private constant HISTORICAL_WAVAX_PHAR = 50_490_341_236_400_479;
 
     bool private forkConfigured;
     PharaohRewardCompounder private compounder;
@@ -135,6 +143,86 @@ contract PharaohRewardCompounderMainnetForkTest is Test {
         assertEq(IERC20(PHAR).allowance(address(compounder), address(SWAP_ROUTER)), 0);
     }
 
+    function test_liveDeployedCompounderConfiguration() public {
+        _requireFork();
+        _requireLiveCompounder();
+
+        assertEq(address(LIVE_COMPOUNDER).codehash, LIVE_COMPOUNDER_CODEHASH);
+        assertEq(LIVE_COMPOUNDER.safe(), SAFE);
+        assertEq(address(LIVE_COMPOUNDER.phar()), PHAR);
+        assertEq(address(LIVE_COMPOUNDER.wavax()), WAVAX);
+        assertEq(address(LIVE_COMPOUNDER.usdc()), USDC);
+        assertEq(address(LIVE_COMPOUNDER.swapRouter()), address(SWAP_ROUTER));
+        assertEq(LIVE_COMPOUNDER.usdcVault(), address(USDC_VAULT));
+        assertEq(LIVE_COMPOUNDER.wavaxVault(), address(WAVAX_VAULT));
+        assertEq(LIVE_COMPOUNDER.pharWavaxTickSpacing(), PHAR_WAVAX_SPACING);
+        assertEq(LIVE_COMPOUNDER.wavaxUsdcTickSpacing(), WAVAX_USDC_SPACING);
+    }
+
+    function test_liveDeployedAtomicHarvestCompoundToWavax() public {
+        _requireFork();
+        _requireLiveCompounder();
+        _exerciseLiveAtomicRewardCycle(address(WAVAX_VAULT), 1 ether);
+    }
+
+    function test_liveDeployedAtomicHarvestCompoundToUsdc() public {
+        _requireFork();
+        _requireLiveCompounder();
+        _exerciseLiveAtomicRewardCycle(address(USDC_VAULT), 1 ether);
+    }
+
+    function test_liveDeployedFirstCyclePreservesHistoricalRewardAttribution() public {
+        _requireFork();
+        _requireLiveCompounder();
+
+        uint256 historicalTotal = HISTORICAL_USDC_PHAR + HISTORICAL_WAVAX_PHAR;
+        uint256 freshUsdcPhar = 1 ether;
+        deal(PHAR, SAFE, historicalTotal, true);
+        deal(PHAR, address(USDC_VAULT), freshUsdcPhar, true);
+
+        (uint256 wavaxQuote,,,) = QUOTER.quoteExactInputSingle(
+            IPharaohQuoterV2.QuoteExactInputSingleParams({
+                tokenIn: PHAR,
+                tokenOut: WAVAX,
+                amountIn: HISTORICAL_WAVAX_PHAR,
+                tickSpacing: PHAR_WAVAX_SPACING,
+                sqrtPriceLimitX96: 0
+            })
+        );
+        bytes memory path = abi.encodePacked(PHAR, PHAR_WAVAX_SPACING, WAVAX, WAVAX_USDC_SPACING, USDC);
+        (uint256 usdcQuote,,,) = QUOTER.quoteExactInput(path, freshUsdcPhar + HISTORICAL_USDC_PHAR);
+        uint256 wavaxRate = (wavaxQuote * 95 * 1 ether) / (100 * HISTORICAL_WAVAX_PHAR);
+        uint256 usdcRate = (usdcQuote * 95 * 1 ether) / (100 * (freshUsdcPhar + HISTORICAL_USDC_PHAR));
+        uint256 wavaxBefore = IERC20(WAVAX).balanceOf(address(WAVAX_VAULT));
+        uint256 usdcBefore = IERC20(USDC).balanceOf(address(USDC_VAULT));
+        uint256 wavaxSupplyBefore = WAVAX_VAULT.totalSupply();
+        uint256 usdcSupplyBefore = USDC_VAULT.totalSupply();
+
+        vm.startPrank(SAFE);
+        IERC20(PHAR).approve(address(LIVE_COMPOUNDER), type(uint256).max);
+        (uint256 carryIn, uint256 carryOut) = LIVE_COMPOUNDER.compound(
+            address(WAVAX_VAULT), HISTORICAL_WAVAX_PHAR, HISTORICAL_WAVAX_PHAR, wavaxRate, block.timestamp + 5 minutes
+        );
+        PharaohRewardExtension(payable(address(USDC_VAULT))).harvestRewards(false, 0);
+        (uint256 targetIn, uint256 targetOut) = LIVE_COMPOUNDER.compound(
+            address(USDC_VAULT),
+            freshUsdcPhar + HISTORICAL_USDC_PHAR,
+            type(uint256).max,
+            usdcRate,
+            block.timestamp + 5 minutes
+        );
+        IERC20(PHAR).approve(address(LIVE_COMPOUNDER), 0);
+        vm.stopPrank();
+
+        assertEq(carryIn, HISTORICAL_WAVAX_PHAR);
+        assertEq(targetIn, freshUsdcPhar + HISTORICAL_USDC_PHAR);
+        assertEq(IERC20(WAVAX).balanceOf(address(WAVAX_VAULT)) - wavaxBefore, carryOut);
+        assertEq(IERC20(USDC).balanceOf(address(USDC_VAULT)) - usdcBefore, targetOut);
+        assertEq(WAVAX_VAULT.totalSupply(), wavaxSupplyBefore);
+        assertEq(USDC_VAULT.totalSupply(), usdcSupplyBefore);
+        _assertLiveCleared();
+    }
+
     function _fundAndApprove(uint256 amount) private {
         deal(PHAR, SAFE, amount, true);
         vm.prank(SAFE);
@@ -146,6 +234,61 @@ contract PharaohRewardCompounderMainnetForkTest is Test {
         assertEq(IERC20(PHAR).balanceOf(address(compounder)), 0);
         assertEq(IERC20(PHAR).allowance(SAFE, address(compounder)), 0);
         assertEq(IERC20(PHAR).allowance(address(compounder), address(SWAP_ROUTER)), 0);
+    }
+
+    function _exerciseLiveAtomicRewardCycle(address targetVault, uint256 reward) private {
+        deal(PHAR, SAFE, 0, true);
+        deal(PHAR, targetVault, reward, true);
+
+        uint256 minimumRate;
+        IERC20 targetAsset;
+        if (targetVault == address(USDC_VAULT)) {
+            bytes memory path = abi.encodePacked(PHAR, PHAR_WAVAX_SPACING, WAVAX, WAVAX_USDC_SPACING, USDC);
+            (uint256 quote,,,) = QUOTER.quoteExactInput(path, reward);
+            minimumRate = (quote * 95 * 1 ether) / (100 * reward);
+            targetAsset = IERC20(USDC);
+        } else {
+            (uint256 quote,,,) = QUOTER.quoteExactInputSingle(
+                IPharaohQuoterV2.QuoteExactInputSingleParams({
+                    tokenIn: PHAR,
+                    tokenOut: WAVAX,
+                    amountIn: reward,
+                    tickSpacing: PHAR_WAVAX_SPACING,
+                    sqrtPriceLimitX96: 0
+                })
+            );
+            minimumRate = (quote * 95 * 1 ether) / (100 * reward);
+            targetAsset = IERC20(WAVAX);
+        }
+
+        uint256 assetBefore = targetAsset.balanceOf(targetVault);
+        uint256 supplyBefore = PharaohLiquidityVault(targetVault).totalSupply();
+
+        vm.startPrank(SAFE);
+        IERC20(PHAR).approve(address(LIVE_COMPOUNDER), type(uint256).max);
+        (uint256 harvested, uint256 exited) = PharaohRewardExtension(payable(targetVault)).harvestRewards(false, 0);
+        (uint256 pharIn, uint256 assetOut) =
+            LIVE_COMPOUNDER.compound(targetVault, reward, type(uint256).max, minimumRate, block.timestamp + 5 minutes);
+        IERC20(PHAR).approve(address(LIVE_COMPOUNDER), 0);
+        vm.stopPrank();
+
+        assertEq(harvested, reward);
+        assertEq(exited, 0);
+        assertEq(pharIn, reward);
+        assertEq(targetAsset.balanceOf(targetVault) - assetBefore, assetOut);
+        assertEq(PharaohLiquidityVault(targetVault).totalSupply(), supplyBefore);
+        _assertLiveCleared();
+    }
+
+    function _assertLiveCleared() private view {
+        assertEq(IERC20(PHAR).balanceOf(SAFE), 0);
+        assertEq(IERC20(PHAR).balanceOf(address(LIVE_COMPOUNDER)), 0);
+        assertEq(IERC20(PHAR).allowance(SAFE, address(LIVE_COMPOUNDER)), 0);
+        assertEq(IERC20(PHAR).allowance(address(LIVE_COMPOUNDER), address(SWAP_ROUTER)), 0);
+    }
+
+    function _requireLiveCompounder() private {
+        if (address(LIVE_COMPOUNDER).code.length == 0) vm.skip(true, "compounder not deployed at fork block");
     }
 
     function _requireFork() private {

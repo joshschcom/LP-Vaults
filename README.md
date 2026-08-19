@@ -135,7 +135,57 @@ make deploy-pharaoh-reward-compounder-mainnet \
   SIGNER_ARGS='--account robinhood-deployer --verifier sourcify'
 ```
 
+The standalone compounder is live and Sourcify-verified at
+`0xe7fCeE8d52B5340168eb33804c49BE086cE04cB0`. It was deployed in Avalanche
+transaction `0x723b7f02bf558e71c8505e90dc46c55e3fd6b09bd667c8ba4db19aa27e9b1b28`,
+block `93087296`. Its runtime codehash is
+`0xbdf6e858119981209156b7d7619201a9b8aed2c5ab6fb5d04611b60cfd89b1c5`.
+Post-deployment checks confirmed every immutable, an empty compounder, and zero
+allowances from the Safe to the compounder and from the compounder to Pharaoh.
+Deployment did not harvest or move rewards and did not alter either vault.
+
 Do not swap merely because rewards are claimable. At block `93022142`, the Safe's complete `0.061374957067274031 PHAR` balance quoted to only `0.001156 USDC`, far below transaction costs. Leave it in the Safe until a documented economic threshold is met. For future public operation, start with no unrelated PHAR in the Safe and execute approve, harvest, compound, and approval reset as one Safe batch per route. The compounder donates underlying rather than calling `deposit()`, so existing shares receive the reward without minting new shares. xPHAR remains outside this flow because its instant exit is penalized.
+
+The read-only monitor now checks the live compounder, implementation, router,
+quoter, and pool codehashes; immutable configuration; route identity and live
+liquidity; both proxy implementations and ProxyAdmins; Safe ownership of every
+share; active positions; token balances; and both PHAR allowances. It also
+simulates each vault's current reward harvest and prints `WAIT` or `READY`
+against a configurable economic threshold. The default is `100000` raw USDC
+(`0.10 USDC`):
+
+```bash
+PHAR_COMPOUND_MIN_USDC_RAW=100000 \
+make pharaoh-status \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc
+```
+
+When one vault reports `READY`, generate a fresh, short-lived Safe Transaction
+Builder batch for that originating vault. The generator pins the current block,
+repeats the monitor's bytecode, route, proxy, ownership, position, balance, and
+allowance checks for both vaults, obtains current Pharaoh quotes, enforces the
+economic threshold on the exact pending amount, sets a 5% minimum-rate margin
+and a 30-minute deadline, and fork-simulates the exact calls before atomically
+writing a checksummed, non-overwriting JSON file under `/tmp`:
+
+```bash
+make prepare-pharaoh-reward-batch \
+  TARGET=usdc \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc
+
+make prepare-pharaoh-reward-batch \
+  TARGET=wavax \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc
+```
+
+The normal batch is PHAR approval, `harvestRewards(true, 0)`, `compound`, and
+approval revocation. It retains xPHAR. On the first cycle only, the generator
+recognizes the exact `0.061374957067274031 PHAR` historical Safe inventory and
+adds one bounded compound call so the previously recorded USDC-vault and
+WAVAX-vault reward portions remain attributed to their originating vaults. It
+rejects any other pre-existing Safe PHAR balance. Never import a generated file
+after its deadline, and review every decoded target, argument, native value,
+and call order in Safe before signing.
 
 The guarded single-use commands used for the implementation deployment were:
 
