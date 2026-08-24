@@ -178,19 +178,16 @@ check_pool() {
   fi
 }
 
-quote_wavax_per_phar() {
+quote_wavax_for_phar() {
+  local phar_in="$1"
   local output
   output=$(cast call \
     "$QUOTER" \
     'quoteExactInputSingle((address,address,uint256,int24,uint160))(uint256,uint160,uint32,uint256)' \
-    "($PHAR,$WAVAX,1000000000000000000,5,0)" \
+    "($PHAR,$WAVAX,$phar_in,5,0)" \
     --rpc-url "$RPC" \
     --block "$CURRENT_BLOCK")
   echo "$output" | sed -n '1p' | awk '{print $1}'
-}
-
-quote_usdc_per_phar() {
-  quote_usdc_for_phar 1000000000000000000
 }
 
 quote_usdc_for_phar() {
@@ -205,6 +202,13 @@ quote_usdc_for_phar() {
     --rpc-url "$RPC" \
     --block "$CURRENT_BLOCK")
   echo "$output" | sed -n '1p' | awk '{print $1}'
+}
+
+minimum_rate_from_quote() {
+  local asset_out="$1"
+  local phar_in="$2"
+  bc <<< \
+    "($asset_out * (10000 - $SLIPPAGE_BPS) * 1000000000000000000) / (10000 * $phar_in)"
 }
 
 chain_id=$(normalize_num "$(cast chain-id --rpc-url "$RPC")")
@@ -286,16 +290,6 @@ if [[ "$safe_allowance" != "0" || "$router_allowance" != "0" ]]; then
   exit 1
 fi
 
-wavax_rate=$(quote_wavax_per_phar)
-usdc_rate=$(quote_usdc_per_phar)
-if [[ "$wavax_rate" == "0" || "$usdc_rate" == "0" ]]; then
-  echo "Pharaoh returned a zero quote" >&2
-  exit 1
-fi
-minimum_wavax_rate=$(bc <<< "($wavax_rate * (10000 - $SLIPPAGE_BPS)) / 10000")
-minimum_usdc_rate=$(bc <<< "($usdc_rate * (10000 - $SLIPPAGE_BPS)) / 10000")
-minimum_fresh_phar=$(bc <<< "(($MIN_REWARD_VALUE_USDC_RAW * 1000000000000000000) + $usdc_rate - 1) / $usdc_rate")
-
 pending_output=$(cast call \
   "$TARGET_VAULT" \
   'harvestRewards(bool,uint256)(uint256,uint256)' \
@@ -318,6 +312,8 @@ if [[ "$(bc <<< "$pending_value < $MIN_REWARD_VALUE_USDC_RAW")" == "1" ]]; then
   echo "  required value: $MIN_REWARD_VALUE_USDC_RAW raw USDC" >&2
   exit 1
 fi
+minimum_fresh_phar=$(bc <<< \
+  "(($MIN_REWARD_VALUE_USDC_RAW * $pending_phar) + $pending_value - 1) / $pending_value")
 
 safe_phar=$(token_balance "$PHAR" "$SAFE")
 CARRY_VAULT="0x0000000000000000000000000000000000000000"
@@ -331,12 +327,10 @@ if [[ "$(bc <<< "$safe_phar >= $HISTORICAL_TOTAL_PHAR")" == "1" ]]; then
   if [[ "$TARGET" == "usdc" ]]; then
     CARRY_VAULT="$WAVAX_VAULT"
     CARRY_PHAR_IN="$HISTORICAL_WAVAX_PHAR"
-    CARRY_MINIMUM_RATE="$minimum_wavax_rate"
     TARGET_EXISTING_PHAR="$HISTORICAL_USDC_PHAR"
   else
     CARRY_VAULT="$USDC_VAULT"
     CARRY_PHAR_IN="$HISTORICAL_USDC_PHAR"
-    CARRY_MINIMUM_RATE="$minimum_usdc_rate"
     TARGET_EXISTING_PHAR="$HISTORICAL_WAVAX_PHAR"
   fi
 fi
@@ -350,10 +344,49 @@ if [[ "$(bc <<< "$MINIMUM_PHAR_IN > $MAXIMUM_PHAR_IN")" == "1" ]]; then
   echo "fresh reward bounds are inconsistent at block $CURRENT_BLOCK" >&2
   exit 1
 fi
+
+# Quote the exact carry call and the target call's worst-case marginal input.
+# The carry executes first and shares the PHAR/WAVAX pool with both target
+# routes. Subtracting the target-route quote for the carry-sized prefix from
+# the combined quote accounts for that first call's price impact. For the
+# USDC target this also conservatively models the carry as if it traversed the
+# WAVAX/USDC pool, although the actual WAVAX carry stops after the first hop.
+if [[ "$CARRY_PHAR_IN" != "0" ]]; then
+  if [[ "$CARRY_VAULT" == "$USDC_VAULT" ]]; then
+    carry_asset_out=$(quote_usdc_for_phar "$CARRY_PHAR_IN")
+  else
+    carry_asset_out=$(quote_wavax_for_phar "$CARRY_PHAR_IN")
+  fi
+  if [[ "$carry_asset_out" == "0" ]]; then
+    echo "Pharaoh returned a zero carry quote" >&2
+    exit 1
+  fi
+  CARRY_MINIMUM_RATE=$(minimum_rate_from_quote "$carry_asset_out" "$CARRY_PHAR_IN")
+fi
+
+combined_phar_in=$(bc <<< "$CARRY_PHAR_IN + $MAXIMUM_PHAR_IN")
+target_prefix_out="0"
 if [[ "$TARGET" == "usdc" ]]; then
-  MINIMUM_ASSET_OUT_PER_PHAR="$minimum_usdc_rate"
+  target_combined_out=$(quote_usdc_for_phar "$combined_phar_in")
+  if [[ "$CARRY_PHAR_IN" != "0" ]]; then
+    target_prefix_out=$(quote_usdc_for_phar "$CARRY_PHAR_IN")
+  fi
 else
-  MINIMUM_ASSET_OUT_PER_PHAR="$minimum_wavax_rate"
+  target_combined_out=$(quote_wavax_for_phar "$combined_phar_in")
+  if [[ "$CARRY_PHAR_IN" != "0" ]]; then
+    target_prefix_out=$(quote_wavax_for_phar "$CARRY_PHAR_IN")
+  fi
+fi
+target_marginal_out=$(bc <<< "$target_combined_out - $target_prefix_out")
+if [[ "$(bc <<< "$target_marginal_out <= 0")" == "1" ]]; then
+  echo "Pharaoh returned a non-positive target marginal quote" >&2
+  exit 1
+fi
+MINIMUM_ASSET_OUT_PER_PHAR=$(minimum_rate_from_quote "$target_marginal_out" "$MAXIMUM_PHAR_IN")
+if [[ "$MINIMUM_ASSET_OUT_PER_PHAR" == "0" ]] \
+  || [[ "$CARRY_PHAR_IN" != "0" && "$CARRY_MINIMUM_RATE" == "0" ]]; then
+  echo "Pharaoh returned a quote too small for a nonzero minimum rate" >&2
+  exit 1
 fi
 
 echo "Fork-simulating the exact Safe call order at block $CURRENT_BLOCK..."
@@ -394,7 +427,7 @@ if [[ "$CARRY_PHAR_IN" != "0" ]]; then
     "$DEADLINE")
 fi
 
-description="Fresh-quote Pharaoh $TARGET_LABEL reward cycle prepared at block $CURRENT_BLOCK. The batch grants a bounded temporary PHAR allowance, preserves any attributed historical carry, harvests liquid PHAR while retaining xPHAR, compounds through the pinned Pharaoh route into the originating vault, and revokes the allowance. Pre-existing unattributed Safe PHAR is $UNATTRIBUTED_SAFE_PHAR raw and does not enlarge the allowance or input cap; excess remains in the Safe. Pre-existing compounder balances are PHAR=$compounder_phar, WAVAX=$compounder_wavax, USDC=$compounder_usdc raw and are conservation-checked by the fork simulation. Minimum fresh reward value is $MIN_REWARD_VALUE_USDC_RAW raw USDC, maximum fresh-reward growth is $MAX_FRESH_REWARD_GROWTH_BPS bps, slippage is $SLIPPAGE_BPS bps, and deadline is $DEADLINE. Every call uses native value zero and CALL operation. Exact call order passed a finalized-block fork simulation before this file was written."
+description="Fresh-quote Pharaoh $TARGET_LABEL reward cycle prepared at block $CURRENT_BLOCK. The batch grants a bounded temporary PHAR allowance, preserves any attributed historical carry, harvests liquid PHAR while retaining xPHAR, compounds through the pinned Pharaoh route into the originating vault, and revokes the allowance. Size-aware marginal quotes cover the maximum target input and the preceding carry's shared-pool price impact. Pre-existing unattributed Safe PHAR is $UNATTRIBUTED_SAFE_PHAR raw and does not enlarge the allowance or input cap; excess remains in the Safe. Pre-existing compounder balances are PHAR=$compounder_phar, WAVAX=$compounder_wavax, USDC=$compounder_usdc raw and are conservation-checked by the fork simulation. Minimum fresh reward value is $MIN_REWARD_VALUE_USDC_RAW raw USDC, maximum fresh-reward growth is $MAX_FRESH_REWARD_GROWTH_BPS bps, slippage is $SLIPPAGE_BPS bps, and deadline is $DEADLINE. Every call uses native value zero and CALL operation. Exact call order passed a finalized-block fork simulation before this file was written."
 
 output_dir=$(dirname "$OUTPUT")
 mkdir -p "$output_dir"

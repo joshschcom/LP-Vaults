@@ -203,6 +203,20 @@ contract CompounderTestRouter is IPharaohSwapRouter {
             assertEq(phar.balanceOf(address(safe)), 97 ether);
         }
 
+        function test_sizeAwareRateHandlesHistoricalLargeRewardQuote() public pure {
+            uint256 pharIn = 7_000_000 ether;
+            uint256 onePharQuote = 2_974_571_381_247_004;
+            uint256 fullInputQuote = 17_468_038_046_512_019_760_952;
+
+            uint256 onePharMinimumRate = (onePharQuote * 95) / 100;
+            uint256 onePharDerivedMinimum = Math.mulDiv(pharIn, onePharMinimumRate, 1 ether);
+            assertGt(onePharDerivedMinimum, fullInputQuote);
+
+            uint256 fullInputMinimumRate = Math.mulDiv(fullInputQuote, 95 * 1 ether, 100 * pharIn);
+            uint256 fullInputDerivedMinimum = Math.mulDiv(pharIn, fullInputMinimumRate, 1 ether);
+            assertLe(fullInputDerivedMinimum, (fullInputQuote * 95) / 100);
+        }
+
         function test_pharDustCannotBlockExactAllowanceCompoundingOrIncreaseInput() public {
             phar.mint(address(compounder), 5 ether);
 
