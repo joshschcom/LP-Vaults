@@ -13,7 +13,7 @@ LFJ_PRICE_ORACLE ?=
 LFJ_VALUATION_HAIRCUT_BPS ?= 200
 SIGNER_ARGS ?=
 
-.PHONY: build test test-pharaoh test-peridot-pharaoh-oracle test-pharaoh-fork check-pharaoh-safe-batches grow-pharaoh-observations check-pharaoh-observations deploy-pharaoh-dry-run deploy-pharaoh-mainnet deploy-pharaoh-upgrade-dry-run deploy-pharaoh-upgrade-mainnet prepare-pharaoh-upgrade deploy-pharaoh-hotfix-dry-run deploy-pharaoh-hotfix-mainnet prepare-pharaoh-hotfix deploy-pharaoh-reward-upgrade-dry-run deploy-pharaoh-reward-upgrade-mainnet prepare-pharaoh-reward-upgrade fund-pharaoh-small-stage-dry-run fund-pharaoh-small-stage-mainnet pharaoh-status pharaoh-pnl-snapshot test-lfj-fork test-lfj-fork-pinned deploy-lfj-proxy-dry-run deploy-lfj-proxy-mainnet deploy-lfj-dry-run deploy-lfj-mainnet check-lfj apy-snapshot apy-compare
+.PHONY: build test test-pharaoh test-peridot-pharaoh-oracle test-pharaoh-fork check-pharaoh-safe-batches grow-pharaoh-observations check-pharaoh-observations deploy-pharaoh-dry-run deploy-pharaoh-mainnet deploy-pharaoh-upgrade-dry-run deploy-pharaoh-upgrade-mainnet prepare-pharaoh-upgrade deploy-pharaoh-hotfix-dry-run deploy-pharaoh-hotfix-mainnet prepare-pharaoh-hotfix deploy-pharaoh-reward-upgrade-dry-run deploy-pharaoh-reward-upgrade-mainnet prepare-pharaoh-reward-upgrade deploy-pharaoh-reward-compounder-dry-run deploy-pharaoh-reward-compounder-mainnet prepare-pharaoh-reward-batch fund-pharaoh-small-stage-dry-run fund-pharaoh-small-stage-mainnet pharaoh-status pharaoh-pnl-snapshot test-lfj-fork test-lfj-fork-pinned deploy-lfj-proxy-dry-run deploy-lfj-proxy-mainnet deploy-lfj-dry-run deploy-lfj-mainnet check-lfj apy-snapshot apy-compare
 
 build:
 	forge build
@@ -83,6 +83,17 @@ deploy-pharaoh-reward-upgrade-mainnet:
 prepare-pharaoh-reward-upgrade:
 	$(if $(strip $(NEW_IMPLEMENTATION)),,$(error NEW_IMPLEMENTATION is required))
 	NEW_IMPLEMENTATION=$(NEW_IMPLEMENTATION) forge script script/DeployPharaohRewardExtension.s.sol:PreparePharaohRewardExtension --rpc-url $(AVAX_RPC) -vvv
+
+deploy-pharaoh-reward-compounder-dry-run:
+	DEPLOYER=$(DEPLOYER) forge script script/DeployPharaohRewardCompounder.s.sol:DeployPharaohRewardCompounder --rpc-url $(AVAX_RPC) -vvv
+
+deploy-pharaoh-reward-compounder-mainnet:
+	$(if $(strip $(SIGNER_ARGS)),,$(error SIGNER_ARGS is required, for example SIGNER_ARGS='--account robinhood-deployer --verifier sourcify'))
+	DEPLOYER=$(DEPLOYER) forge script script/DeployPharaohRewardCompounder.s.sol:DeployPharaohRewardCompounder --rpc-url $(AVAX_RPC) --broadcast --verify $(SIGNER_ARGS) -vvv
+
+prepare-pharaoh-reward-batch:
+	$(if $(filter usdc wavax,$(TARGET)),,$(error TARGET must be usdc or wavax))
+	RPC=$(AVAX_RPC) TARGET=$(TARGET) MIN_REWARD_VALUE_USDC_RAW=$(or $(MIN_REWARD_VALUE_USDC_RAW),100000) SLIPPAGE_BPS=$(or $(SLIPPAGE_BPS),500) DEADLINE_SECONDS=$(or $(DEADLINE_SECONDS),1800) OUTPUT=$(OUTPUT) ./scripts/prepare-pharaoh-reward-batch.sh
 
 fund-pharaoh-small-stage-dry-run:
 	DEPLOYER=$(DEPLOYER) forge script script/FundPharaohSmallStage.s.sol:FundPharaohSmallStage --rpc-url $(AVAX_RPC) -vvv

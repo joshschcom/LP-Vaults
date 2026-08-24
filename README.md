@@ -84,15 +84,17 @@ make prepare-pharaoh-hotfix \
 
 The implementation deployment itself changed no proxy state. The Safe subsequently executed the two `ProxyAdmin.upgradeAndCall(proxy, implementation, 0x)` calls atomically with native value zero. `safe/Pharaoh-partial-exit-hotfix-43114.json` is now a retained historical artifact and must not be re-executed. The post-upgrade fork passed 8/8 at block `92634917` and the PnL check remained healthy before the staged files were marked ready.
 
-### Reward extension (candidate, not live)
+### Live reward extension
 
-The live partial-exit implementation is 24,153 bytes, leaving only 423 bytes below EIP-170. Reward handling therefore remains outside that core bytecode. `PharaohRewardExtension` is a small implementation layer that handles only `harvestRewards(bool,uint256)` and delegatecalls every other selector to the exact live implementation at `0x37E2...3770`. Its constructor pins that implementation's runtime codehash, while the fallback preserves the proxy's storage context, caller, value, return data, and revert data. The extension inherits the same namespaced OpenZeppelin ownership and reentrancy storage used by the base vault.
+The partial-exit implementation is 24,153 bytes, leaving only 423 bytes below EIP-170. Reward handling therefore remains outside that core bytecode. `PharaohRewardExtension` is a small implementation layer that handles only `harvestRewards(bool,uint256)` and delegatecalls every other selector to the exact partial-exit implementation at `0x37E2...3770`. Its constructor pins that implementation's runtime codehash, while the fallback preserves the proxy's storage context, caller, value, return data, and revert data. The extension inherits the same namespaced OpenZeppelin ownership and reentrancy storage used by the base vault.
+
+The verified extension at `0x165E1f072e7bEeDf94f14F732838354cA20bA45d` is live on both proxies. The Safe installed it atomically in transaction `0x84293d19d92d6cba0fd9844dc1db8a4c75c6b27c1876af877a4fd8448b2395ab`. The first harvest transaction, `0x16c0f421e6e4823f901efda0fb6ce4e2a963499d838159eafdafd92932943e47`, forwarded `0.061374957067274031 PHAR` to the Safe and exited no xPHAR.
 
 The harvest function is callable only by the current vault owner. Its reward list is fixed to PHAR and xPHAR, and liquid PHAR can only be forwarded to that owner—the Safe—not to a caller-selected recipient. Passing zero as `minimumPharFromXPhar` retains xPHAR. Passing a nonzero minimum opts into exiting the vault's complete xPHAR balance and checks the actual PHAR balance increase before forwarding. Pharaoh's deployed xPHAR currently applies a 50% instant-exit penalty and can return less when its PHAR reserve is short, so xPHAR exit must never be triggered without a reviewed minimum.
 
 For shareholder-safe operation, the Safe must harvest, swap PHAR through a separately reviewed route, and transfer the resulting USDC or WAVAX back to the originating vault in one atomic Safe batch. The direct asset transfer is then reflected in `totalAssets()` for all existing shares. Do not harvest to the Safe in a public vault without completing that same-batch donation, and do not count unharvested incentives in collateral or PnL.
 
-The guarded candidate workflow is:
+The retained deployment workflow is:
 
 ```bash
 make deploy-pharaoh-reward-upgrade-dry-run \
@@ -109,7 +111,90 @@ make prepare-pharaoh-reward-upgrade \
   NEW_IMPLEMENTATION=<verified-extension-address>
 ```
 
-Deployment changes no proxy state. After all tests and external scans pass, both generated `ProxyAdmin.upgradeAndCall(proxy, extension, 0x)` calls must be executed atomically by the Safe with native value zero. No live deployment or Safe payload has been approved yet.
+The implementation deployment itself changed no proxy state. The historical upgrade batch is retained under `safe/` and must not be replayed.
+
+### Reward compounder
+
+`PharaohRewardCompounder` is a standalone, non-upgradeable processor for Safe-held liquid PHAR. It does not alter the vault proxies. Only the pinned Safe can call it; the Pharaoh router, two destination vaults, assets, routes, and tick spacings are immutable. Each call bounds the PHAR input, enforces a signed deadline and a minimum output rate per PHAR, grants the router only an exact temporary approval, sends the swap output directly to the selected vault, checks the actual vault balance increase, and clears its router approval.
+
+Live factory and QuoterV2 checks at block `93020999` selected these routes:
+
+- WAVAX vault: PHAR/WAVAX pool `0xb78DA03566B6537aCC22F6a4ba070AbCF6eDebF6`, tick spacing `5`.
+- USDC vault: the same PHAR/WAVAX pool followed by WAVAX/USDC pool `0xf01449C0bA930B6e2CaCA3DEF3CCBd7a3E589534`, tick spacing `10` for the second hop.
+
+At that block, `1 PHAR` executed to `0.002978049938058970 WAVAX` or `0.018877 USDC` on a fork. Direct PHAR/USDC pools had no active liquidity, and the tested p33 routes returned less or exhausted active liquidity. The deployment script pins the verified Pharaoh router and quoter codehashes, both route-pool codehashes, current vault implementation, vault ownership, closed caps, and live liquidity before deploying.
+
+```bash
+make deploy-pharaoh-reward-compounder-dry-run \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc \
+  DEPLOYER=0x94696d767e65a75581145646960FA0eC886cE5d2
+
+make deploy-pharaoh-reward-compounder-mainnet \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc \
+  DEPLOYER=0x94696d767e65a75581145646960FA0eC886cE5d2 \
+  SIGNER_ARGS='--account robinhood-deployer --verifier sourcify'
+```
+
+The standalone compounder is live and Sourcify-verified at
+`0xe7fCeE8d52B5340168eb33804c49BE086cE04cB0`. It was deployed in Avalanche
+transaction `0x723b7f02bf558e71c8505e90dc46c55e3fd6b09bd667c8ba4db19aa27e9b1b28`,
+block `93087296`. Its runtime codehash is
+`0xbdf6e858119981209156b7d7619201a9b8aed2c5ab6fb5d04611b60cfd89b1c5`.
+Post-deployment checks confirmed every immutable, an empty compounder, and zero
+allowances from the Safe to the compounder and from the compounder to Pharaoh.
+Deployment did not harvest or move rewards and did not alter either vault.
+
+Do not swap merely because rewards are claimable. At block `93022142`, the Safe's complete `0.061374957067274031 PHAR` balance quoted to only `0.001156 USDC`, far below transaction costs. Leave it in the Safe until a documented economic threshold is met. For future public operation, start with no unrelated PHAR in the Safe and execute approve, harvest, compound, and approval reset as one Safe batch per route. The compounder donates underlying rather than calling `deposit()`, so existing shares receive the reward without minting new shares. xPHAR remains outside this flow because its instant exit is penalized.
+
+The read-only monitor now checks the live compounder, implementation, router,
+quoter, and pool codehashes; immutable configuration; route identity and live
+liquidity; both proxy implementations and ProxyAdmins; Safe ownership of every
+share; active positions; token balances; and both PHAR allowances. It also
+simulates each vault's current reward harvest and prints `WAIT` or `READY`
+against a configurable economic threshold. The default is `100000` raw USDC
+(`0.10 USDC`):
+
+```bash
+PHAR_COMPOUND_MIN_USDC_RAW=100000 \
+make pharaoh-status \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc
+```
+
+When one vault reports `READY`, generate a fresh, short-lived Safe Transaction
+Builder batch for that originating vault. The generator pins the current block,
+repeats the monitor's bytecode, route, proxy, ownership, position, balance, and
+allowance checks for both vaults, obtains current Pharaoh quotes, enforces the
+economic threshold on the exact pending amount, sets a 5% minimum-rate margin
+and a 30-minute deadline, caps fresh PHAR consumption at 5% above the simulated
+pending amount, grants only the carry plus that capped amount as a temporary
+allowance, and fork-simulates the exact calls before atomically writing a
+checksummed, non-overwriting JSON file under `/tmp`:
+
+```bash
+make prepare-pharaoh-reward-batch \
+  TARGET=usdc \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc
+
+make prepare-pharaoh-reward-batch \
+  TARGET=wavax \
+  AVAX_RPC=https://api.avax.network/ext/bc/C/rpc
+```
+
+The normal batch is PHAR approval, `harvestRewards(true, 0)`, `compound`, and
+approval revocation. It retains xPHAR. On the first cycle only, the generator
+recognizes the exact `0.061374957067274031 PHAR` historical Safe inventory and
+adds one bounded compound call so the previously recorded USDC-vault and
+WAVAX-vault reward portions remain attributed to their originating vaults.
+Third-party dust cannot block generation: any unattributed Safe balance or
+pre-existing compounder dust is printed for review, does not enlarge the
+calculated approval or target input cap, and is conservation-checked so excess
+PHAR remains in the Safe. Never import a generated file after its deadline, and
+review every decoded target, argument, native value, warning, and call order in
+Safe before signing. The current generator intentionally requires closed
+deposit caps and exclusive Safe share ownership; do not reuse this canary
+workflow after shares are distributed or deposits are reopened. A public vault
+needs a separately reviewed anti-reward-sniping policy before discrete
+harvested rewards are donated to share value.
 
 The guarded single-use commands used for the implementation deployment were:
 
@@ -147,7 +232,7 @@ Uncollected fees and non-pair incentive tokens are excluded. Entry and exit oper
 
 Asset-denominated `deposit()` is the supported entry point. Exact-share `mint()` is intentionally disabled (`maxMint() == 0`) because the net contribution is only known after swap and LP execution.
 
-Pharaoh's position manager can transfer PHAR and xPHAR to the vault automatically when liquidity changes. These and any other unpriced tokens held by the vault are excluded from `totalAssets()`. The live core deliberately omits reward forwarding and xPHAR conversion to remain below EIP-170. The candidate reward extension can forward PHAR to the owner with a protected, opt-in xPHAR exit, but incentives remain excluded from NAV until the Safe atomically converts and donates the proceeds back to the vault.
+Pharaoh's position manager can transfer PHAR and xPHAR to the vault automatically when liquidity changes. These and any other unpriced tokens held by the vault are excluded from `totalAssets()`. The live core deliberately omits reward forwarding and xPHAR conversion to remain below EIP-170. The live reward extension can forward PHAR to the owner with a protected, opt-in xPHAR exit, but incentives remain excluded from NAV until the Safe atomically converts and donates the proceeds back to the vault.
 
 For collateral valuation, lending markets should use the vault proxy's standard ERC-4626 `convertToAssets()` path and preserve their own collateral-factor and liquidation haircuts. `totalAssets()` enforces the spot/TWAP/independent-oracle bounds. Oracle staleness, unsafe price divergence, or insufficient Pharaoh observation history intentionally makes valuation revert rather than silently use spot. The lending integration must treat that revert as an oracle outage and have a tested market-pause/guardian procedure; fail-closed valuation trades availability for manipulation resistance.
 
@@ -228,7 +313,7 @@ Append the same data to ignored CSV files under `data/`:
 make pharaoh-pnl-snapshot AVAX_RPC=https://api.avax.network/ext/bc/C/rpc
 ```
 
-The monitor reports conservative ERC-4626 accounting and also simulates redeeming all Safe-owned shares with `eth_call`. The latter includes currently claimable LP fees and the executable paired-token swap without burning shares or moving funds. Its default cost bases are the planned 10-USDC and 1-WAVAX canaries. Override `USDC_COST_BASIS_RAW` or `WAVAX_COST_BASIS_RAW` after any additional capital flow or share transfer. Reported PnL excludes Safe/keeper gas and unpriced PHAR/xPHAR rewards.
+The monitor reports conservative ERC-4626 accounting and also simulates redeeming all Safe-owned shares with `eth_call`. The latter includes currently claimable LP fees and the executable paired-token swap without burning shares or moving funds. Its default cost bases are the actual staged totals of 30 USDC and 1.75 WAVAX. Override `USDC_COST_BASIS_RAW` or `WAVAX_COST_BASIS_RAW` after any additional capital flow or share transfer. Vault PnL excludes Safe/keeper gas and PHAR/xPHAR because those tokens are not vault assets. A separate external-reward section reports Safe and vault PHAR/xPHAR inventory and executable Pharaoh QuoterV2 values in both WAVAX and USDC; those quotes are monitoring data, not collateral prices.
 
 For the initial canary, do not leave the deployed 100,000-USDC and 15,000-WAVAX caps publicly available. In one atomic Safe batch per vault: approve exactly the seed amount, unpause, deposit to the Safe, then call `setDepositCap(1)`. A cap of one raw unit is below the resulting managed value, so further deposits remain closed while the vault stays unpaused and the keeper can rebalance. Raise the cap only after pool-depth testing and multisig hardening.
 
@@ -316,8 +401,8 @@ Before listing either proxy in a lending market:
 - Wait at least 30 minutes after buffer activation and verify `observe([1800, 0])` succeeds on both pools.
 - Use a multisig batch to approve the asset, unpause, make a multisig-owned seed deposit, and reduce the cap below managed assets atomically.
 - Fund the multisig with the seed USDC/WAVAX first. Safe web users can build the atomic calls with Transaction Builder; verify every target, value, and calldata before signing.
-- Keep public deposits closed during the 10-USDC/1-WAVAX canary; the deployed caps are not justified by current pool depth.
-- Define and test the multisig process for exiting automatically claimed xPHAR, converting PHAR and other incentives, and donating the proceeds back to the vault.
+- Keep public deposits closed during staged canary monitoring; the deployed caps are not justified by current pool depth.
+- Use the reviewed compounder to harvest, convert, and donate liquid PHAR atomically, with a current quote, minimum rate, bounded input, deadline, and zero unrelated Safe PHAR. Do not execute below the documented economic threshold. Keep xPHAR unless a separately reviewed minimum-output exit is justified.
 - Test the lending market's oracle-outage and liquidation-pause behavior when `convertToAssets()` intentionally reverts.
 - Add the proxy, never the implementation, as the lending-market underlying/collateral asset.
 
